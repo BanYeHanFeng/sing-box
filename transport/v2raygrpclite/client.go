@@ -34,6 +34,20 @@ type Client struct {
 	options    option.V2RayGRPCOptions
 	url        *url.URL
 	host       string
+	headers    http.Header
+}
+
+// buildClientHeader merges the gRPC default headers with the user-provided
+// custom headers, letting the latter override the former.
+func buildClientHeader(custom http.Header) http.Header {
+	headers := defaultClientHeader.Clone()
+	for key, values := range custom {
+		headers.Del(key)
+		for _, value := range values {
+			headers.Add(key, value)
+		}
+	}
+	return headers
 }
 
 func NewClient(ctx context.Context, dialer N.Dialer, serverAddr M.Socksaddr, options option.V2RayGRPCOptions, tlsConfig tls.Config) adapter.V2RayClientTransport {
@@ -58,7 +72,8 @@ func NewClient(ctx context.Context, dialer N.Dialer, serverAddr M.Socksaddr, opt
 			Path:    "/" + options.ServiceName + "/Tun",
 			RawPath: "/" + url.PathEscape(options.ServiceName) + "/Tun",
 		},
-		host: host,
+		host:    host,
+		headers: buildClientHeader(options.Headers.Build()),
 	}
 	if tlsConfig == nil {
 		client.transport.DialTLSContext = func(ctx context.Context, network, addr string, cfg *tls.STDConfig) (net.Conn, error) {
@@ -83,7 +98,7 @@ func (c *Client) DialContext(ctx context.Context) (net.Conn, error) {
 		Method: http.MethodPost,
 		Body:   pipeInReader,
 		URL:    c.url,
-		Header: defaultClientHeader,
+		Header: c.headers,
 		Host:   c.host,
 	}
 	request = request.WithContext(ctx)

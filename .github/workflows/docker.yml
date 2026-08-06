@@ -56,6 +56,8 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: 1.26.6
+      - name: 检出 fork 依赖
+        run: bash .github/scripts/setup-fork-deps.sh
       - name: Clone cronet-go
         if: matrix.naive
         run: |

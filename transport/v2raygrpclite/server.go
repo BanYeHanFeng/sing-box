@@ -35,6 +35,7 @@ type Server struct {
 	h2Server   *http2.Server
 	h2cHandler http.Handler
 	path       string
+	headers    http.Header
 }
 
 func NewServer(ctx context.Context, logger logger.ContextLogger, options option.V2RayGRPCOptions, tlsConfig tls.ServerConfig, handler adapter.V2RayServerTransportHandler) (*Server, error) {
@@ -46,6 +47,7 @@ func NewServer(ctx context.Context, logger logger.ContextLogger, options option.
 		h2Server: &http2.Server{
 			IdleTimeout: time.Duration(options.IdleTimeout),
 		},
+		headers: options.Headers.Build(),
 	}
 	server.httpServer = &http.Server{
 		Handler: server,
@@ -80,6 +82,17 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	writer.Header().Set("Content-Type", "application/grpc")
 	writer.Header().Set("TE", "trailers")
+	for key, values := range s.headers {
+		// Don't let custom headers clobber the gRPC protocol headers that
+		// the client needs to recognize this as a gRPC stream.
+		if key == "Content-Type" || key == "Te" || key == "Trailer" {
+			continue
+		}
+		writer.Header().Del(key)
+		for _, value := range values {
+			writer.Header().Add(key, value)
+		}
+	}
 	writer.WriteHeader(http.StatusOK)
 	done := make(chan struct{})
 	conn := v2rayhttp.NewHTTP2Wrapper(newGunConn(request.Body, writer, writer.(http.Flusher)))
