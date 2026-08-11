@@ -6,6 +6,3 @@
 
 **grpclite**
 - 增加自定义 headers
-
-**TUIC**
-- 修复 0-RTT 握手同步与拒绝恢复
