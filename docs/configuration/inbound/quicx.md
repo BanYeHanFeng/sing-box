@@ -66,7 +66,7 @@ How the server handles quicx authentication failures while keeping the transport
 
 | Policy       | Description                                                                                     |
 |--------------|-------------------------------------------------------------------------------------------------|
-| `h3_close`   | Gracefully close the connection: send a GOAWAY frame, drain in-flight requests, then close the QUIC connection with `H3_NO_ERROR`, like a normal HTTP/3 server shutdown. |
+| `h3_close`   | Close the QUIC connection with `H3_NO_ERROR`, like a normal HTTP/3 connection close. |
 | `silent_drop`| Silently drop the connection without sending `CONNECTION_CLOSE`; the prober only sees a timeout.|
 
 `h3_close` is used by default.
