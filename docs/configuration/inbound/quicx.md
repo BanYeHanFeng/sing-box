@@ -25,8 +25,6 @@
   },
 
   ... // QUIC Fields
-
-  "masquerade": "" // or {}
 }
 ```
 
@@ -85,53 +83,6 @@ The ALPN must be `h3`.
 
 See [QUIC Fields](/configuration/shared/quic/) for details.
 
-#### masquerade
-
-HTTP3 server behavior (URL string configuration) for standard HTTP/3 connections.
-
-| Scheme       | Example                 | Description        |
-|--------------|-------------------------|--------------------|
-| `file`       | `file:///var/www`       | As a file server   |
-| `http/https` | `http://127.0.0.1:8080` | As a reverse proxy |
-
-Conflict with `masquerade.type`.
-
-A 404 page will be returned if masquerade is not configured.
-
-#### masquerade.type
-
-HTTP3 server behavior (Object configuration) for standard HTTP/3 connections.
-
-| Type     | Description                 | Fields                              |
-|----------|-----------------------------|-------------------------------------|
-| `file`   | As a file server            | `directory`                         |
-| `proxy`  | As a reverse proxy          | `url`, `rewrite_host`               |
-| `string` | Reply with a fixed response | `status_code`, `headers`, `content` |
-
-Conflict with `masquerade`.
-
-A 404 page will be returned if masquerade is not configured.
-
-#### masquerade.directory
-
-File server root directory.
-
-#### masquerade.url
-
-Reverse proxy target URL.
-
-#### masquerade.rewrite_host
-
-Rewrite the `Host` header to the target URL.
-
-#### masquerade.status_code
-
-Fixed response status code.
-
-#### masquerade.headers
-
-Fixed response headers.
-
-#### masquerade.content
-
-Fixed response content.
+Standard HTTP/3 requests that are not QUICX proxy traffic are terminated with a
+graceful HTTP/3 shutdown (GOAWAY, drain, then `H3_NO_ERROR`), matching the
+behavior of a normal HTTP/3 server.
