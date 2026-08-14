@@ -176,6 +176,7 @@ nav:
           - VLESS: configuration/inbound/vless.md
           - TUIC: configuration/inbound/tuic.md
           - Hysteria2: configuration/inbound/hysteria2.md
+          - QUICX: configuration/inbound/quicx.md
           - AnyTLS: configuration/inbound/anytls.md
           - Snell: configuration/inbound/snell.md
           - Tun: configuration/inbound/tun.md
@@ -200,6 +201,7 @@ nav:
           - VLESS: configuration/outbound/vless.md
           - TUIC: configuration/outbound/tuic.md
           - Hysteria2: configuration/outbound/hysteria2.md
+          - QUICX: configuration/outbound/quicx.md
           - AnyTLS: configuration/outbound/anytls.md
           - Snell: configuration/outbound/snell.md
           - Tor: configuration/outbound/tor.md
