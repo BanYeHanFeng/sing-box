@@ -12,7 +12,6 @@ type QUICXInboundOptions struct {
 	AuthFailurePolicy string             `json:"auth_failure_policy,omitempty" enum:"h3_close,silent_drop"`
 	InboundTLSOptionsContainer
 	QUICOptions
-	Masquerade *Hysteria2Masquerade `json:"masquerade,omitempty"`
 }
 
 type QUICXUser struct {

@@ -3,10 +3,6 @@ package quicx
 import (
 	"context"
 	"net"
-	"net/http"
-	"net/http/httputil"
-	"net/url"
-	"os"
 	"time"
 
 	"github.com/gofrs/uuid/v5"
@@ -24,7 +20,6 @@ import (
 	E "github.com/sagernet/sing/common/exceptions"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
-	"github.com/sagernet/sing/service/filemanager"
 )
 
 func RegisterInbound(registry *inbound.Registry) {
@@ -47,10 +42,6 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 		return nil, C.ErrTLSRequired
 	}
 	tlsConfig, err := tls.NewServer(ctx, logger, common.PtrValueOrDefault(options.TLS))
-	if err != nil {
-		return nil, err
-	}
-	masqueradeHandler, err := newMasqueradeHandler(ctx, options.Masquerade)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +79,6 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 		Heartbeat:         time.Duration(options.Heartbeat),
 		UDPTimeout:        udpTimeout,
 		Handler:           inbound,
-		MasqueradeHandler: masqueradeHandler,
 		AuthFailurePolicy: options.AuthFailurePolicy,
 	})
 	if err != nil {
@@ -115,51 +105,6 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 	inbound.server = service
 	inbound.userNameList = userNameList
 	return inbound, nil
-}
-
-func newMasqueradeHandler(ctx context.Context, masquerade *option.Hysteria2Masquerade) (http.Handler, error) {
-	if masquerade == nil || masquerade.Type == "" {
-		return nil, nil
-	}
-	switch masquerade.Type {
-	case C.Hysterai2MasqueradeTypeFile:
-		masqueradeDirectory := filemanager.BasePath(ctx, os.ExpandEnv(masquerade.FileOptions.Directory))
-		_, err := filemanager.ReadDir(ctx, masqueradeDirectory)
-		if err != nil && !os.IsNotExist(err) {
-			return nil, E.Cause(err, "read masquerade directory")
-		}
-		return http.FileServer(http.Dir(masqueradeDirectory)), nil
-	case C.Hysterai2MasqueradeTypeProxy:
-		masqueradeURL, err := url.Parse(masquerade.ProxyOptions.URL)
-		if err != nil {
-			return nil, E.Cause(err, "parse masquerade URL")
-		}
-		return &httputil.ReverseProxy{
-			Rewrite: func(r *httputil.ProxyRequest) {
-				r.SetURL(masqueradeURL)
-				if !masquerade.ProxyOptions.RewriteHost {
-					r.Out.Host = r.In.Host
-				}
-			},
-			ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-				w.WriteHeader(http.StatusBadGateway)
-			},
-		}, nil
-	case C.Hysterai2MasqueradeTypeString:
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if masquerade.StringOptions.StatusCode != 0 {
-				w.WriteHeader(masquerade.StringOptions.StatusCode)
-			}
-			for key, values := range masquerade.StringOptions.Headers {
-				for _, value := range values {
-					w.Header().Add(key, value)
-				}
-			}
-			w.Write([]byte(masquerade.StringOptions.Content))
-		}), nil
-	default:
-		return nil, E.New("unknown masquerade type: ", masquerade.Type)
-	}
 }
 
 func (h *Inbound) NewConnectionEx(ctx context.Context, conn net.Conn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
