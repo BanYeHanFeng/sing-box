@@ -225,8 +225,6 @@ jobs:
       - name: 设置共享 ldflags
         run: |
           echo "LDFLAGS_SHARED=$(cat release/LDFLAGS)" >> "${GITHUB_ENV}"
-      - name: 生成 eBPF 对象
-        run: make ebpf_generate
       - name: 构建
         run: |
           set -xeuo pipefail
