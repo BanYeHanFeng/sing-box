@@ -7,7 +7,6 @@
 
   "server": "127.0.0.1",
   "server_port": 443,
-  "uuid": "2DD61D93-75D8-4DA4-AC0E-6AECE7EAC365",
   "password": "hello",
   "heartbeat": "10s",
   "network": "tcp",
@@ -37,15 +36,13 @@
 
 服务器端口。
 
-#### uuid
+#### password
 
 ==必填==
 
-QUICX 用户 UUID
-
-#### password
-
 QUICX 用户密码
+
+该密码是用于向服务器认证的仅密码凭据（用户 UUID 已被移除）。
 
 #### heartbeat
 
