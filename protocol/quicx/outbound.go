@@ -6,7 +6,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/gofrs/uuid/v5"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/outbound"
 	"github.com/sagernet/sing-box/common/dialer"
@@ -45,10 +44,6 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 	if err != nil {
 		return nil, err
 	}
-	userUUID, err := uuid.FromString(options.UUID)
-	if err != nil {
-		return nil, E.Cause(err, "invalid uuid")
-	}
 	outboundDialer, err := dialer.New(ctx, options.DialerOptions, options.ServerIsDomain())
 	if err != nil {
 		return nil, err
@@ -67,7 +62,6 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 			InitialPacketSize:       options.InitialPacketSize,
 			DisablePathMTUDiscovery: options.DisablePathMTUDiscovery,
 		},
-		UUID:      userUUID,
 		Password:  options.Password,
 		Heartbeat: time.Duration(options.Heartbeat),
 	})
