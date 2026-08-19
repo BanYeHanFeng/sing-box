@@ -16,14 +16,12 @@ type QUICXInboundOptions struct {
 
 type QUICXUser struct {
 	Name     string `json:"name,omitempty"`
-	UUID     string `json:"uuid,omitempty"`
 	Password string `json:"password,omitempty"`
 }
 
 type QUICXOutboundOptions struct {
 	DialerOptions
 	ServerOptions
-	UUID      string             `json:"uuid,omitempty"`
 	Password  string             `json:"password,omitempty"`
 	Heartbeat badoption.Duration `json:"heartbeat,omitempty"`
 	Network   NetworkList        `json:"network,omitempty"`
