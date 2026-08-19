@@ -10,7 +10,6 @@
   "users": [
     {
       "name": "sekai",
-      "uuid": "059032A9-7D40-4A96-9BB1-36823D848068",
       "password": "hello"
     }
   ],
@@ -38,15 +37,13 @@
 
 QUICX 用户
 
-#### users.uuid
+#### users.password
 
 ==必填==
 
-QUICX 用户 UUID
-
-#### users.password
-
 QUICX 用户密码
+
+由于认证已改为仅使用密码（移除了用户 UUID），每个用户的 `password` 作为客户端用于认证的唯一凭据，因此配置的密码必须唯一。
 
 #### auth_timeout
 

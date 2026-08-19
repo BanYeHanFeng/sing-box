@@ -7,7 +7,6 @@
 
   "server": "127.0.0.1",
   "server_port": 443,
-  "uuid": "2DD61D93-75D8-4DA4-AC0E-6AECE7EAC365",
   "password": "hello",
   "heartbeat": "10s",
   "network": "tcp",
@@ -37,15 +36,14 @@ The server address.
 
 The server port.
 
-#### uuid
+#### password
 
 ==Required==
 
-QUICX user uuid
-
-#### password
-
 QUICX user password
+
+This is the password-only credential used to authenticate to the server (the
+user UUID has been removed).
 
 #### heartbeat
 

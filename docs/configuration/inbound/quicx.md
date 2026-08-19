@@ -10,7 +10,6 @@
   "users": [
     {
       "name": "sekai",
-      "uuid": "059032A9-7D40-4A96-9BB1-36823D848068",
       "password": "hello"
     }
   ],
@@ -38,15 +37,15 @@ See [Listen Fields](/configuration/shared/listen/) for details.
 
 QUICX users
 
-#### users.uuid
+#### users.password
 
 ==Required==
 
-QUICX user uuid
-
-#### users.password
-
 QUICX user password
+
+Now that authentication is password-only (the user UUID has been removed), each
+user's `password` acts as the unique credential that the client uses to
+authenticate, so passwords must be unique among the configured users.
 
 #### auth_timeout
 
