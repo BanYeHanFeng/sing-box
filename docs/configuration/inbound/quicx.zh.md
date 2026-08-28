@@ -16,6 +16,7 @@
   "auth_timeout": "3s",
   "heartbeat": "10s",
   "auth_failure_policy": "h3_close",
+  "bbr_profile": "",
   "tls": {
     "enabled": true,
     "certificate_path": "/path/to/certificate.crt",
@@ -67,6 +68,12 @@ QUICX 用户密码
 | `silent_drop`| 静默丢弃连接、不发送 `CONNECTION_CLOSE`，探测者只能得到超时。                |
 
 默认使用 `h3_close`。
+
+#### bbr_profile
+
+BBR 拥塞控制算法配置，可选 `conservative` `standard` `aggressive`。
+
+留空时为兼容 QUICX 原有行为使用 `conservative`。
 
 #### tls
 

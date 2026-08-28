@@ -62,8 +62,9 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 			InitialPacketSize:       options.InitialPacketSize,
 			DisablePathMTUDiscovery: options.DisablePathMTUDiscovery,
 		},
-		Password:  options.Password,
-		Heartbeat: time.Duration(options.Heartbeat),
+		Password:   options.Password,
+		Heartbeat:  time.Duration(options.Heartbeat),
+		BBRProfile: options.BBRProfile,
 	})
 	if err != nil {
 		return nil, err

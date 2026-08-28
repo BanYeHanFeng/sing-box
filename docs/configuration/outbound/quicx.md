@@ -9,6 +9,7 @@
   "server_port": 443,
   "password": "hello",
   "heartbeat": "10s",
+  "bbr_profile": "",
   "network": "tcp",
   "tls": {
     "enabled": true,
@@ -50,6 +51,12 @@ user UUID has been removed).
 Interval for sending heartbeat packets for keeping the connection alive
 
 `10s` is used by default.
+
+#### bbr_profile
+
+BBR congestion control algorithm profile, one of `conservative` `standard` `aggressive`.
+
+If empty, `conservative` is used for compatibility with the historical QUICX behavior.
 
 #### network
 
