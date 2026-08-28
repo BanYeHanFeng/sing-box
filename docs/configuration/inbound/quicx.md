@@ -16,6 +16,7 @@
   "auth_timeout": "3s",
   "heartbeat": "10s",
   "auth_failure_policy": "h3_close",
+  "bbr_profile": "",
   "tls": {
     "enabled": true,
     "certificate_path": "/path/to/certificate.crt",
@@ -69,6 +70,12 @@ How the server handles quicx authentication failures while keeping the transport
 | `silent_drop`| Silently drop the connection without sending `CONNECTION_CLOSE`; the prober only sees a timeout.|
 
 `h3_close` is used by default.
+
+#### bbr_profile
+
+BBR congestion control algorithm profile, one of `conservative` `standard` `aggressive`.
+
+If empty, `conservative` is used for compatibility with the historical QUICX behavior.
 
 #### tls
 

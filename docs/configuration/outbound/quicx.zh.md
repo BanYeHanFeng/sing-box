@@ -9,6 +9,7 @@
   "server_port": 443,
   "password": "hello",
   "heartbeat": "10s",
+  "bbr_profile": "",
   "network": "tcp",
   "tls": {
     "enabled": true,
@@ -49,6 +50,12 @@ QUICX 用户密码
 发送心跳包以保持连接存活的时间间隔
 
 默认使用 `10s`。
+
+#### bbr_profile
+
+BBR 拥塞控制算法配置，可选 `conservative` `standard` `aggressive`。
+
+留空时为兼容 QUICX 原有行为使用 `conservative`。
 
 #### network
 

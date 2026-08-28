@@ -7330,6 +7330,14 @@
                 "silent_drop"
               ]
             },
+            "bbr_profile": {
+              "type": "string",
+              "enum": [
+                "standard",
+                "conservative",
+                "aggressive"
+              ]
+            },
             "tls": {
               "$ref": "#/$defs/InboundTLSOptions"
             },
@@ -13016,14 +13024,19 @@
               "minimum": 0,
               "maximum": 65535
             },
-            "uuid": {
-              "type": "string"
-            },
             "password": {
               "type": "string"
             },
             "heartbeat": {
               "$ref": "#/$defs/Duration"
+            },
+            "bbr_profile": {
+              "type": "string",
+              "enum": [
+                "standard",
+                "conservative",
+                "aggressive"
+              ]
             },
             "network": {
               "anyOf": [
@@ -16766,9 +16779,6 @@
       "type": "object",
       "properties": {
         "name": {
-          "type": "string"
-        },
-        "uuid": {
           "type": "string"
         },
         "password": {
