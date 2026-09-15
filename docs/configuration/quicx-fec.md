@@ -116,7 +116,30 @@ Notes:
 | Bursty loss | Retransmission | One loss per group (two with `max_parity_rows: 2`) |
 | Traffic signature | Constant high rate, easy to spot | Same shape as regular QUIC traffic, plus a few small packets |
 
-## 7. Configuration
+## 7. Measurements on a real lossy path
+
+Next to the CI tests, end-to-end measurements were run with a binary built by the release
+pipeline, over a `veth` link with `tc netem loss 12%` (per packet, in both directions,
+GSO enabled): a 3MB HTTP download through the QUICX proxy and 150 UDP round trips.
+
+| Configuration | TCP 3MB median | UDP delivery (150 round trips) |
+| --- | --- | --- |
+| FEC off | 233 ms | 109/150 = 72.7% |
+| FEC on (default 10% cap) | 241 ms | **116/150 = 77.3%** |
+| FEC on (25% cap) | 299 ms | 116/150 = 77.3% |
+
+- **UDP / DATAGRAM relay**: FEC directly improves delivery (+4.6 percentage points here).
+  DATAGRAM frames are never retransmitted, so a lost one is lost forever; erasure coding is
+  the only way to get it back on the receiver side.
+- **TCP streams**: QUIC streams retransmit and BBR tolerates 12% loss; FEC doesn't help
+  throughput there. At the default 10% cap it is roughly free (241ms vs 233ms), at a 25% cap
+  it is clearly slower (299ms) - the extra parity is pure waste. For interactive,
+  request/response traffic the win is one round trip of recovery latency, not throughput.
+- Recommended deployment: prefer FEC for UDP. Either use two outbounds with
+  `"network": "udp"` (FEC on) and `"network": "tcp"` (FEC off), or enable it globally with
+  the default 10% cap.
+
+## 8. Configuration
 
 ```json
 {
