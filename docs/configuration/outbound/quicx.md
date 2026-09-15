@@ -73,7 +73,10 @@ overhead math and measurements.
 FEC is **enabled by default**: omitting this section keeps it enabled with the defaults
 below. It only takes effect if the server enables it as well: the client announces
 support in its authentication request, and only enables FEC once the server confirmed
-it. Enabling it on one side therefore never wastes bandwidth.
+it. Enabling it on one side therefore never wastes bandwidth. FEC is negotiated **per
+connection**, so both sides write one `QUICX FEC enabled` debug line (including the peer
+address) for every connection - one more pair per redial is expected
+(see [QUICX FEC](../quicx-fec.md#8-logging)).
 
 While FEC is enabled, a statistics line is written every 10 seconds (windows without FEC
 activity are skipped). It is written at debug level, and promoted to info level - at

@@ -141,11 +141,30 @@ GSO enabled): a 3MB HTTP download through the QUICX proxy and 150 UDP round trip
 
 ## 8. Logging
 
-Both sides log a debug line once FEC is negotiated:
+Both sides log a debug line once FEC is negotiated, including the peer address:
 
 ```
-QUICX FEC enabled (client, max overhead 10%, max group 16)
+QUICX FEC enabled (server, 203.0.113.9:41234, max overhead 10%, max group 16)
+QUICX FEC enabled (client, 198.51.100.7:30010, max overhead 10%, max group 16)
 ```
+
+**One line per QUIC connection, not per client or per process.** FEC is negotiated per
+connection (the client announces support in its authentication request and the server
+switches that connection to FEC after confirming it), so every new connection negotiates
+it again: a client that redials on heartbeat, idle timeout or network change adds one
+such pair to the log. A QUICX outbound keeps a single connection and redials when it
+drops, so dozens of lines in one log file are expected and do not mean that FEC was
+enabled repeatedly on one connection.
+
+- Don't use this line to tell whether FEC is working; watch the statistics below
+  instead - a growing `repaired` is the actual evidence;
+- If the server can't open the confirmation stream, it logs a `notify FEC accept` error:
+  the client doesn't enable FEC and the server stops short of logging `enabled`. Only the
+  client side `enabled (client, ...)` line and the statistics prove that both ends
+  agreed;
+- The line is written at **debug** level only. To keep it out of a frequently redialing
+  client's log, use the default `"log": {"level": "info"}` - the info level statistics
+  line for repaired windows is not lost.
 
 While FEC is enabled, a statistics line is written every 10 seconds (windows without
 any FEC activity are skipped):
