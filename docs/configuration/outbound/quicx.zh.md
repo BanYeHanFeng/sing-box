@@ -10,6 +10,11 @@
   "password": "hello",
   "heartbeat": "10s",
   "bbr_profile": "",
+  "fec": {
+    "max_overhead_percent": 10,
+    "max_group_size": 16,
+    "max_parity_rows": 1
+  },
   "network": "tcp",
   "tls": {
     "enabled": true,
@@ -56,6 +61,31 @@ QUICX 用户密码
 BBR 拥塞控制算法配置，可选 `conservative` `standard` `aggressive`。
 
 默认使用 `standard`。
+
+#### fec
+
+包级前向纠错（FEC）配置，用于在丢包链路上修复丢失的 QUIC 包，参阅 [QUICX FEC](/zh/configuration/quicx-fec/)。
+
+留空（不配置）表示不启用 FEC。只有在服务端也启用时才会生效：客户端在鉴权请求中声明支持，
+服务端确认后才真正开启，因此单边开启不会浪费任何带宽。
+
+#### fec.max_overhead_percent
+
+冗余流量上限（占被保护流量的百分比）。
+
+默认使用 `10`。无论链路丢包多严重，FEC 都不会超过该上限。
+
+#### fec.max_group_size
+
+单个 FEC 分组最多保护的包数量。
+
+默认使用 `16`。分组越大相对开销越低，但丢包修复的等待时间越长。
+
+#### fec.max_parity_rows
+
+每个分组最多发送的校验行数。
+
+`1`（默认）每组可修复 1 个丢包（XOR 校验，类似 RAID 5），`2` 每组可修复 2 个丢包（GF(2^8) 上的 Reed-Solomon 校验，类似 RAID 6）。
 
 #### network
 

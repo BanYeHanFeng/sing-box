@@ -80,6 +80,7 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 		Handler:           inbound,
 		AuthFailurePolicy: options.AuthFailurePolicy,
 		BBRProfile:        options.BBRProfile,
+		FEC:               buildFECOptions(options.FEC),
 	})
 	if err != nil {
 		return nil, err
@@ -99,6 +100,17 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 	inbound.server = service
 	inbound.userNameList = userNameList
 	return inbound, nil
+}
+
+func buildFECOptions(options *option.QUICXFECOptions) *quicx.FECOptions {
+	if options == nil {
+		return nil
+	}
+	return &quicx.FECOptions{
+		MaxOverheadPercent: options.MaxOverheadPercent,
+		MaxGroupSize:       options.MaxGroupSize,
+		MaxParityRows:      options.MaxParityRows,
+	}
 }
 
 func (h *Inbound) NewConnectionEx(ctx context.Context, conn net.Conn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {

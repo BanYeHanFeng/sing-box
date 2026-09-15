@@ -1,0 +1,108 @@
+name: FEC CI
+
+on:
+  push:
+    branches:
+      - '**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: 使用 FEC 分支依赖构建
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7
+      - name: 配置 Go 环境
+        uses: actions/setup-go@v7
+        with:
+          go-version: 1.26.5
+          cache: false
+      - name: 检出 fork 依赖（FEC 分支）并生成 go.work
+        env:
+          FORK_QUIC_GO_REF: ${{ vars.FORK_QUIC_GO_REF || 'fec-dev' }}
+          FORK_SING_QUIC_REF: ${{ vars.FORK_SING_QUIC_REF || 'fec-dev' }}
+        run: bash .github/scripts/setup-fork-deps.sh
+      - name: 构建 sing-box
+        run: |
+          set -xeuo pipefail
+          mkdir -p dist
+          go build -v -trimpath -o dist/sing-box -tags "$(cat release/DEFAULT_BUILD_TAGS)" \
+            -ldflags "-X 'github.com/sagernet/sing-box/constant.Version=fec-ci' $(cat release/LDFLAGS) -s -w -buildid=" \
+            ./cmd/sing-box
+        env:
+          CGO_ENABLED: "0"
+      - name: 生成自签证书
+        run: |
+          set -euo pipefail
+          openssl ecparam -genkey -name prime256v1 -out key.pem
+          openssl req -new -x509 -key key.pem -out cert.pem -days 1 -subj "/CN=localhost"
+      - name: QUICX FEC 配置解析检查
+        run: |
+          set -euo pipefail
+          cat > fec-test.json <<'EOF'
+          {
+            "log": { "level": "warn" },
+            "inbounds": [
+              {
+                "type": "quicx",
+                "tag": "quicx-in",
+                "listen": "127.0.0.1",
+                "listen_port": 18443,
+                "users": [{ "name": "test", "password": "test" }],
+                "fec": { "max_overhead_percent": 10, "max_group_size": 16, "max_parity_rows": 1 },
+                "tls": {
+                  "enabled": true,
+                  "certificate_path": "cert.pem",
+                  "key_path": "key.pem",
+                  "alpn": ["h3"]
+                }
+              }
+            ],
+            "outbounds": [
+              {
+                "type": "quicx",
+                "tag": "quicx-out",
+                "server": "127.0.0.1",
+                "server_port": 18443,
+                "password": "test",
+                "fec": {},
+                "tls": {
+                  "enabled": true,
+                  "server_name": "localhost",
+                  "alpn": ["h3"]
+                }
+              }
+            ]
+          }
+          EOF
+          ./dist/sing-box check -c fec-test.json
+          echo "配置解析通过"
+      - name: 格式检查（仅报告）
+        run: |
+          files="option/quicx.go protocol/quicx/inbound.go protocol/quicx/outbound.go"
+          gofmt -l ${files} || true
+          gofmt -d ${files} || true
+      - name: gofmt 自动格式化并回推
+        if: github.ref == 'refs/heads/fec-dev' && github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          files="option/quicx.go protocol/quicx/inbound.go protocol/quicx/outbound.go"
+          gofmt -w ${files}
+          if git diff --quiet; then
+            echo "格式无需修改"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "样式: gofmt 自动格式化 QUICX FEC 代码"
+          git push

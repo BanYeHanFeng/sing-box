@@ -17,6 +17,11 @@
   "heartbeat": "10s",
   "auth_failure_policy": "h3_close",
   "bbr_profile": "",
+  "fec": {
+    "max_overhead_percent": 10,
+    "max_group_size": 16,
+    "max_parity_rows": 1
+  },
   "tls": {
     "enabled": true,
     "certificate_path": "/path/to/certificate.crt",
@@ -76,6 +81,33 @@ How the server handles quicx authentication failures while keeping the transport
 BBR congestion control algorithm profile, one of `conservative` `standard` `aggressive`.
 
 `standard` is used by default.
+
+#### fec
+
+Packet level forward error correction (FEC) configuration, used to repair QUIC
+packets lost on the path. See [QUICX FEC](/configuration/quicx-fec/).
+
+Leave it unset to disable FEC.
+
+#### fec.max_overhead_percent
+
+Upper bound of the parity traffic, as a percentage of the protected traffic.
+
+`10` is used by default. FEC never exceeds this bound, no matter how lossy the path is.
+
+#### fec.max_group_size
+
+Maximum number of packets protected by one FEC group.
+
+`16` is used by default. Larger groups reduce the relative overhead, but increase the
+time until a lost packet can be repaired.
+
+#### fec.max_parity_rows
+
+Maximum number of parity rows per group.
+
+`1` (the default) repairs a single loss per group (XOR parity, RAID 5 style), `2`
+repairs two losses per group (Reed-Solomon parity over GF(2^8), RAID 6 style).
 
 #### tls
 
