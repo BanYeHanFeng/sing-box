@@ -139,7 +139,36 @@ GSO enabled): a 3MB HTTP download through the QUICX proxy and 150 UDP round trip
   `"network": "udp"` (FEC on) and `"network": "tcp"` (FEC off), or enable it globally with
   the default 10% cap.
 
-## 8. Configuration
+## 8. Logging
+
+Both sides log a debug line once FEC is negotiated:
+
+```
+QUICX FEC enabled (client, max overhead 10%, max group 16)
+```
+
+While FEC is enabled, a statistics line is written every 10 seconds (windows without
+any FEC activity are skipped):
+
+```
+QUICX FEC: path loss 3.4%, group 13 (overhead 7.7%), repaired 128, unrecoverable 9,
+  parity 96 sent / 91 received, protected 1200 packets (14.2 KB parity data)
+```
+
+- The line is written at **debug** level, except when packets were actually repaired
+  (`repaired`/`unrecoverable` > 0): those windows are logged at **info** level, at most
+  once a minute per connection, so a lossy server doesn't flood its log. In other words,
+  the default `"log": {"level": "info"}` is enough to see whether FEC is doing
+  something; use `"log": {"level": "debug"}` to also see the idle (zero redundancy)
+  windows.
+- Fields: `path loss` is the loss rate the peer measured from packet number gaps
+  (including packets FEC repaired, i.e. the real path quality); `group`/`overhead` is the
+  current group size and redundancy, `idle` means no loss and therefore no redundancy;
+  `repaired` is the number of packets reconstructed from parity in this window;
+  `unrecoverable` counts packets parity couldn't repair (they fall back to QUIC
+  retransmission); `parity sent / received` and `parity data` show the redundancy cost.
+
+## 9. Configuration
 
 ```json
 {

@@ -156,7 +156,33 @@ CI 单测之外，用发布流水线构建的二进制在本机做了端到端�
 - 因此推荐部署方式：**UDP 优先**。可以拆两个出站分别设置 `"network": "udp"`（开 FEC）与
   `"network": "tcp"`（不开 FEC）；或者整体开启但保持默认 10% 上限。
 
-## 10. 局限与后续
+## 10. 日志与观测
+
+协商完成后两端各输出一条 debug 日志：
+
+```
+QUICX FEC enabled (client, max overhead 10%, max group 16)
+```
+
+运行期间每 10 秒输出一条统计（窗口内没有任何 FEC 活动时不输出）：
+
+```
+QUICX FEC: path loss 3.4%, group 13 (overhead 7.7%), repaired 128, unrecoverable 9,
+  parity 96 sent / 91 received, protected 1200 packets (14.2 KB parity data)
+```
+
+- 该统计默认是 **debug** 级别；若窗口内确实修复过包（`repaired`/`unrecoverable` > 0），
+  会提升为 **info** 级别，但**每个连接每分钟最多一条**，避免丢包链路上的服务器被刷屏。
+  也就是说：只想看"FEC 是否在生效"，保持默认 `"log": {"level": "info"}` 即可；
+  想看到包括零冗余窗口在内的完整轨迹，用 `"log": {"level": "debug"}` 一直开着。
+- 字段含义：
+  - `path loss`：对端按包号空洞测出的**链路丢包率**（包含已被 FEC 修复掉的包，所以它反映真实链路质量）；
+  - `group` / `overhead`：当前分组大小与冗余比，`idle` 表示链路没丢包、当前零冗余；
+  - `repaired`：本窗口由校验包恢复的包数（FEC 真正起作用的量）；
+  - `unrecoverable`：本窗口校验也修不回来、只能交给 QUIC 重传的包数；
+  - `parity sent / received` 与 `parity data`：本窗口收发的校验包数量与校验流量（开销是否失控看这里）。
+
+## 11. 局限与后续
 
 - 只保护 1-RTT 应用数据包；握手、0-RTT 不保护（握手阶段本身有重传兜底）；
 - 校验包自身也会丢（丢包率 p 时，冗余的有效性约为 `1-p`），所以它是"提高到达率"而不是"保证到达"；
