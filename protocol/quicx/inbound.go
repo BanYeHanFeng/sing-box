@@ -102,15 +102,20 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 	return inbound, nil
 }
 
+// buildFECOptions returns the FEC options for the QUICX client and service. FEC is
+// enabled by default; it is only disabled when explicitly turned off in the
+// configuration.
 func buildFECOptions(options *option.QUICXFECOptions) *quicx.FECOptions {
-	if options == nil {
+	if options != nil && options.Enabled != nil && !*options.Enabled {
 		return nil
 	}
-	return &quicx.FECOptions{
-		MaxOverheadPercent: options.MaxOverheadPercent,
-		MaxGroupSize:       options.MaxGroupSize,
-		MaxParityRows:      options.MaxParityRows,
+	fecOptions := &quicx.FECOptions{}
+	if options != nil {
+		fecOptions.MaxOverheadPercent = options.MaxOverheadPercent
+		fecOptions.MaxGroupSize = options.MaxGroupSize
+		fecOptions.MaxParityRows = options.MaxParityRows
 	}
+	return fecOptions
 }
 
 func (h *Inbound) NewConnectionEx(ctx context.Context, conn net.Conn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {

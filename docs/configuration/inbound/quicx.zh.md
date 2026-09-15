@@ -18,6 +18,7 @@
   "auth_failure_policy": "h3_close",
   "bbr_profile": "",
   "fec": {
+    "enabled": true,
     "max_overhead_percent": 10,
     "max_group_size": 16,
     "max_parity_rows": 1
@@ -82,9 +83,23 @@ BBR 拥塞控制算法配置，可选 `conservative` `standard` `aggressive`。
 
 #### fec
 
-包级前向纠错（FEC）配置，用于在丢包链路上修复丢失的 QUIC 包，参阅 [QUICX FEC](/zh/configuration/quicx-fec/)。
+包级前向纠错（FEC）配置，用于在丢包链路上修复丢失的 QUIC 包，原理、开销数学与实测数据见
+[QUICX FEC](../quicx-fec.zh.md)。
 
-留空（不配置）表示不启用 FEC。
+**默认开启**，不写这一段就是开启（并使用下面的默认值）。只有客户端与服务端都开启时才生效：
+客户端在鉴权请求中声明支持，服务端确认后才真正启用。
+
+运行期间每 10 秒会输出一条统计（窗口内无 FEC 活动时不输出），默认 debug 级别；窗口内实际修复过
+包时提升为 info 级别（每连接每分钟最多一条）：
+
+```
+QUICX FEC: path loss 3.4%, group 13 (overhead 7.7%), repaired 128, unrecoverable 9,
+  parity 96 sent / 91 received, protected 1200 packets (14.2 KB parity data)
+```
+
+#### fec.enabled
+
+是否启用 FEC。默认 `true`；设为 `false` 可单独在本端关闭。
 
 #### fec.max_overhead_percent
 

@@ -33,13 +33,17 @@ type QUICXOutboundOptions struct {
 	QUICOptions
 }
 
-// QUICXFECOptions enables packet level forward error correction for QUICX.
-// FEC repairs packets that were lost on the path with parity packets, so that the
-// congestion controller doesn't have to react to the loss. Unlike Hysteria's
-// "brutal" congestion control, no bandwidth is wasted: the redundancy follows the
-// loss rate measured by the peer, and a path without loss doesn't see a single
-// parity packet.
+// QUICXFECOptions configures packet level forward error correction for QUICX.
+//
+// FEC is enabled by default: it repairs packets that were lost on the path with parity
+// packets, so that the congestion controller doesn't have to react to the loss. Unlike
+// Hysteria's "brutal" congestion control, no bandwidth is wasted: the redundancy
+// follows the loss rate measured by the peer, and a path without loss doesn't see a
+// single parity packet.
 type QUICXFECOptions struct {
+	// Enabled turns packet level FEC on or off. It is enabled by default; set it to
+	// false to disable FEC on this endpoint.
+	Enabled *bool `json:"enabled,omitempty"`
 	// MaxOverheadPercent caps the parity traffic as a percentage of the protected
 	// traffic. Defaults to 10.
 	MaxOverheadPercent int `json:"max_overhead_percent,omitempty"`

@@ -11,6 +11,7 @@
   "heartbeat": "10s",
   "bbr_profile": "",
   "fec": {
+    "enabled": true,
     "max_overhead_percent": 10,
     "max_group_size": 16,
     "max_parity_rows": 1
@@ -66,11 +67,27 @@ BBR congestion control algorithm profile, one of `conservative` `standard` `aggr
 #### fec
 
 Packet level forward error correction (FEC) configuration, used to repair QUIC
-packets lost on the path. See [QUICX FEC](/configuration/quicx-fec/).
+packets lost on the path. See [QUICX FEC](../quicx-fec.md) for the mechanism, the
+overhead math and measurements.
 
-Leave it unset to disable FEC. FEC only takes effect if the server enables it as well:
-the client announces support in its authentication request, and only enables FEC once
-the server confirmed it. Enabling it on one side therefore never wastes bandwidth.
+FEC is **enabled by default**: omitting this section keeps it enabled with the defaults
+below. It only takes effect if the server enables it as well: the client announces
+support in its authentication request, and only enables FEC once the server confirmed
+it. Enabling it on one side therefore never wastes bandwidth.
+
+While FEC is enabled, a statistics line is written every 10 seconds (windows without FEC
+activity are skipped). It is written at debug level, and promoted to info level - at
+most once a minute per connection - when packets were actually repaired:
+
+```
+QUICX FEC: path loss 3.4%, group 13 (overhead 7.7%), repaired 128, unrecoverable 9,
+  parity 96 sent / 91 received, protected 1200 packets (14.2 KB parity data)
+```
+
+#### fec.enabled
+
+Whether to enable FEC. Defaults to `true`; set it to `false` to disable FEC on this
+endpoint (the server then won't enable it either).
 
 #### fec.max_overhead_percent
 

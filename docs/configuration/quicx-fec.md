@@ -170,10 +170,14 @@ QUICX FEC: path loss 3.4%, group 13 (overhead 7.7%), repaired 128, unrecoverable
 
 ## 9. Configuration
 
+FEC is **enabled by default**: omitting the `fec` section keeps it enabled with the
+defaults, and `"fec": {"enabled": false}` disables it on that endpoint.
+
 ```json
 {
   "type": "quicx",
   "fec": {
+    "enabled": true,
     "max_overhead_percent": 10,
     "max_group_size": 16,
     "max_parity_rows": 1
@@ -183,4 +187,5 @@ QUICX FEC: path loss 3.4%, group 13 (overhead 7.7%), repaired 128, unrecoverable
 
 FEC has to be enabled on both sides; the client announces support in its authentication
 request and only enables FEC once the server confirmed it, so enabling it on one side
-never wastes bandwidth.
+never wastes bandwidth. See the [outbound](outbound/quicx.md#fec) and
+[inbound](inbound/quicx.md#fec) pages for the individual fields.

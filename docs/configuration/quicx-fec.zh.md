@@ -63,6 +63,9 @@ RTT 量级的恢复时间。用户不想要 brutal，那我们就要在**不增�
    `ParityPacketsSent = 0`）；
 5. **组尾保护**：分组空闲 2ms 未填满时，也为未满分组补发校验包，避免"最后一个包永远没保护"。
 
+配置上 **FEC 默认开启**：不写 `fec` 段即开启，`"fec": {"enabled": false}` 可单独在本端关闭；
+调参见[出站](outbound/quicx.zh.md#fec)与[入站](inbound/quicx.zh.md#fec)文档。
+
 ## 5. 开销数学
 
 冗余 = `m / k`。单行（m=1）时：
