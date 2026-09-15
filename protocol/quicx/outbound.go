@@ -66,6 +66,7 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 		Heartbeat:  time.Duration(options.Heartbeat),
 		BBRProfile: options.BBRProfile,
 		FEC:        buildFECOptions(options.FEC),
+		Logger:     logger,
 	})
 	if err != nil {
 		return nil, err
