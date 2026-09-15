@@ -56,7 +56,7 @@ Interval for sending heartbeat packets for keeping the connection alive
 
 BBR congestion control algorithm profile, one of `conservative` `standard` `aggressive`.
 
-If empty, `conservative` is used for compatibility with the historical QUICX behavior.
+`standard` is used by default.
 
 #### network
 

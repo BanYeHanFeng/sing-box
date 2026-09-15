@@ -73,7 +73,7 @@ QUICX 用户密码
 
 BBR 拥塞控制算法配置，可选 `conservative` `standard` `aggressive`。
 
-留空时为兼容 QUICX 原有行为使用 `conservative`。
+默认使用 `standard`。
 
 #### tls
 

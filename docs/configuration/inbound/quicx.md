@@ -75,7 +75,7 @@ How the server handles quicx authentication failures while keeping the transport
 
 BBR congestion control algorithm profile, one of `conservative` `standard` `aggressive`.
 
-If empty, `conservative` is used for compatibility with the historical QUICX behavior.
+`standard` is used by default.
 
 #### tls
 
