@@ -77,9 +77,13 @@ BBR 拥塞控制算法配置，可选 `conservative` `standard` `aggressive`。
 包时提升为 info 级别（每连接每分钟最多一条）：
 
 ```
-QUICX FEC: path loss 3.4%, group 13 (overhead 7.7%), repaired 128, unrecoverable 9,
-  parity 96 sent / 91 received, protected 1200 packets (14.2 KB parity data)
+QUICX FEC: tx loss 3.4% (peer reported), group 13 rows 2, overhead 15.4% configured / 6.0% measured,
+  protected 1200 pkts (195.3 KB), parity 96 pkts (14.2 KB), skipped 2 groups;
+  rx repaired 128, unrecoverable 9, parity 91 pkts, protected 1400 pkts
 ```
+
+`tx` 一列是本端**发送**方向（丢包率由对端观测后回传），`rx` 一列是本端**接收**方向；两者由不同
+端点测量，不要混着看。`skipped` 是因超出上限而**主动放弃保护**的分组数。
 
 #### fec.enabled
 
@@ -89,19 +93,27 @@ QUICX FEC: path loss 3.4%, group 13 (overhead 7.7%), repaired 128, unrecoverable
 
 冗余流量上限（占被保护流量的百分比）。
 
-默认使用 `10`。无论链路丢包多严重，FEC 都不会超过该上限。
+默认使用 `10`。该上限约束的是**实际发出的校验字节**：分组太小或包长分布不均时，
+FEC 会直接放弃该分组的校验（见统计里的 `skipped`），而不是超发。
 
 #### fec.max_group_size
 
 单个 FEC 分组最多保护的包数量。
 
-默认使用 `16`。分组越大相对开销越低，但丢包修复的等待时间越长。
+默认使用 `32`。分组越大相对开销越低，但丢包修复的等待时间越长。
+
+该值必须大到能在上限内放得下 `max_parity_rows` 行校验，否则多余的行不会被使用
+（默认 `32` / `10%` 下 2 行约占 6.8%，可以启用）。
 
 #### fec.max_parity_rows
 
 每个分组最多发送的校验行数。
 
-`1`（默认）每组可修复 1 个丢包（XOR 校验，类似 RAID 5），`2` 每组可修复 2 个丢包（GF(2^8) 上的 Reed-Solomon 校验，类似 RAID 6）。
+`2`（默认）每组可修复 2 个丢包（GF(2^8) 上的 Reed-Solomon 校验，类似 RAID 6），
+`1` 每组只能修复 1 个丢包（XOR 校验，类似 RAID 5）。
+
+移动链路上的丢包以突发为主，单行校验遇到"同组内 2 个及以上丢包"时整组都修不回来
+（实测 15.7 小时日志里 `unrecoverable` 是 `repaired` 的 2～2.5 倍），因此默认使用 2 行。
 
 #### network
 

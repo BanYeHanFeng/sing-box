@@ -71,37 +71,62 @@ This is the main difference to `brutal`:
    so reordering is not mistaken for loss);
 2. it reports the counters **every 20ms** (cumulative counters, so a lost report frame
    costs accuracy for nothing);
-3. the **sender** smooths the reports with an EWMA (alpha = 0.3), targets
-   `1.5 x loss rate`, clamped to `[1/max_group_size, max_overhead_percent]`, and derives
-   the group size `k` from it;
+3. the **sender** smooths the reports with an EWMA (alpha = 0.3) and asks for
+   `1.5 x loss rate` redundancy. It uses two Reed-Solomon parity rows when the loss rate
+   is at least 12% (or the requirement at least 25%) and the group size limit can pay for
+   them, one row otherwise. It derives the group size `k` from the requirement, counting
+   the `FEC_REPAIR` frame header (estimated from an EWMA of the packet size) - without
+   that, a group that is exactly at the cap would be rejected by the budget for its
+   header alone and FEC would stop working precisely where it is needed most;
 4. below 0.2% loss FEC is **completely off**: `k = 0`, not a single parity packet
    (verified in CI: `ParityPacketsSent = 0` on a clean path);
 5. a partial group is protected after 2ms of idle time, so the last packets of a burst
-   aren't left unprotected.
+   aren't left unprotected;
+6. all of the above only decides what FEC *wants* to send. Every parity packet also has to
+   fit into a **byte budget** (section 5); when it doesn't, that group stays unprotected
+   (counted as `skipped`) instead of overspending.
 
-## 5. Overhead
+## 5. Overhead, and how the cap is actually enforced
 
-Redundancy is `m / k`. With a single parity row:
+**The cap bounds bytes, not an intention.** The sender keeps a byte budget: protected
+traffic earns credit at `max_overhead_percent`, parity bytes spend it, and when a group's
+parity doesn't fit into the remaining credit the group is left unprotected (counted in
+`skipped`) rather than overspending. The long run ratio of parity bytes to the protected
+bytes FEC evaluated therefore never exceeds the cap - no matter how small the groups are,
+how skewed the packet sizes are, or how lossy the path is.
 
-| Measured loss p | Target redundancy 1.5p | Group k (max 16) | Actual redundancy | P(>= 2 losses in group) |
-| --- | --- | --- | --- | --- |
-| < 0.2% | - | off | 0 | - |
-| 1% | 1.5% | 16 | 6.25% | 1.1% |
-| 2% | 3% | 16 | 6.25% | 4.0% |
-| 5% | 7.5% | 13 | 7.7% | 13.5% |
-| 10% | 10% (capped) | 10 | 10% | 26.4% |
-| 20% | 10% (capped) | 10 | 10% | 62.4% |
+Within that budget, redundancy is about `m / k` (m parity rows over k data packets). With
+the defaults `k <= 32`, `m <= 2`, and 1200 byte packets:
+
+| Measured loss p | Required redundancy 1.5p | Rows m | Group k | Nominal overhead m/k | Two losses in a group |
+| --- | --- | --- | --- | --- | --- |
+| < 0.2% | - | - | off | 0 | - |
+| 1% | 1.5% | 1 | 32 | 3.1% | not repaired |
+| 2% | 3% | 1 | 32 | 3.1% | not repaired |
+| 5% | 7.5% | 1 | 13 | 7.7% | not repaired |
+| 10% | 15% (capped at 10%) | 1 | 11 | 9.1% | not repaired |
+| 12% | 18% (capped at 10%) | 2 | 22 | 9.1% | **repaired** |
+| >= 20% | 30% (capped at 10%) | 2 | 22 | 9.1% | **repaired** |
 
 Notes:
 
 - redundancy comes in steps of `1/k`, so at very low loss rates the actual overhead is a
-  few times the loss rate (6.25% vs 1%). `max_group_size: 32` lowers the floor to 3.1%,
-  at the cost of a longer repair delay;
-- above roughly 10-15% loss a single parity row leaves many groups unrepaired;
-  `max_parity_rows: 2` (Reed-Solomon) repairs two losses per group, but it is only enabled
-  when `max_overhead_percent >= 2/max_group_size`;
-- FEC also reduces the maximum protected packet size by 40-130 bytes (depending on
-  `max_group_size`). This overhead exists only while FEC is active, i.e. only on lossy
+  few times the loss rate (3.1% at 1%). Larger `k` lowers the floor, at the cost of a
+  longer repair delay and a higher chance of a burst landing inside one group;
+- **two parity rows have to fit**: `2/max_group_size` must be within
+  `max_overhead_percent`, otherwise that branch is never taken. With the default `32` /
+  `10%` two rows cost about 6.8% including the frame header and are used; with
+  `max_group_size: 16` two rows need `max_overhead_percent >= 13`;
+- **a single row can't repair bursts**: two or more losses in one group leave the whole
+  group unrepaired (the decoder counts *every* missing packet of such a group as
+  `unrecoverable`). Losses on mobile paths come in bursts, which is why two rows are now
+  the default;
+- **small groups are left unprotected on purpose**: a parity packet carries a frame header
+  (up to 112 bytes with `max_group_size=32`), so with tiny packets or tiny groups the
+  parity would exceed 10% of the protected traffic and FEC skips that group. Refusing to
+  repair one group beats overspending;
+- FEC also reduces the maximum protected packet size by one frame header reserve (112 bytes
+  with `max_group_size=32`). That cost exists only while FEC is active, i.e. only on lossy
   paths.
 
 ## 6. Comparison with HY2 `brutal`
@@ -144,8 +169,8 @@ GSO enabled): a 3MB HTTP download through the QUICX proxy and 150 UDP round trip
 Both sides log a debug line once FEC is negotiated, including the peer address:
 
 ```
-QUICX FEC enabled (server, 203.0.113.9:41234, max overhead 10%, max group 16)
-QUICX FEC enabled (client, 198.51.100.7:30010, max overhead 10%, max group 16)
+QUICX FEC enabled (server, 203.0.113.9:41234, max overhead 10%, max group 32, parity rows 2)
+QUICX FEC enabled (client, 198.51.100.7:30010, max overhead 10%, max group 32, parity rows 2)
 ```
 
 **One line per QUIC connection, not per client or per process.** FEC is negotiated per
@@ -170,8 +195,9 @@ While FEC is enabled, a statistics line is written every 10 seconds (windows wit
 any FEC activity are skipped):
 
 ```
-QUICX FEC: path loss 3.4%, group 13 (overhead 7.7%), repaired 128, unrecoverable 9,
-  parity 96 sent / 91 received, protected 1200 packets (14.2 KB parity data)
+QUICX FEC: tx loss 3.4% (peer reported), group 13 rows 2, overhead 7.7% configured / 7.2% measured,
+  protected 1200 pkts (1.4 MB), parity 96 pkts (118.2 KB), skipped 2 groups;
+  rx repaired 128, unrecoverable 9, parity 91 pkts, protected 1400 pkts
 ```
 
 - The line is written at **debug** level, except when packets were actually repaired
@@ -180,12 +206,23 @@ QUICX FEC: path loss 3.4%, group 13 (overhead 7.7%), repaired 128, unrecoverable
   the default `"log": {"level": "info"}` is enough to see whether FEC is doing
   something; use `"log": {"level": "debug"}` to also see the idle (zero redundancy)
   windows.
-- Fields: `path loss` is the loss rate the peer measured from packet number gaps
-  (including packets FEC repaired, i.e. the real path quality); `group`/`overhead` is the
-  current group size and redundancy, `idle` means no loss and therefore no redundancy;
-  `repaired` is the number of packets reconstructed from parity in this window;
-  `unrecoverable` counts packets parity couldn't repair (they fall back to QUIC
-  retransmission); `parity sent / received` and `parity data` show the redundancy cost.
+- **`tx` and `rx` are two directions measured by different endpoints - don't read them as
+  one number**:
+  - `tx loss` is the loss rate of the direction this endpoint **sends** on, measured by the
+    **peer** from packet number gaps (including packets FEC repaired, i.e. the real path
+    quality). The `protected`/`parity`/`overhead`/`skipped` fields next to it describe this
+    endpoint's sending side;
+  - `rx repaired`/`rx unrecoverable` are what this endpoint's decoder saw on the direction
+    it **receives** on (`unrecoverable` counts only packets parity couldn't repair, which
+    fall back to QUIC retransmission); `rx parity`/`rx protected` are the received parity
+    packet and protected packet counts.
+- `overhead ... configured / ... measured`: the first value is the `m/k` **configuration**,
+  the second is the **measured** `parity bytes / protected bytes`. The cap applies to the
+  measured value; printing only the configured one hides problems such as a partial group
+  being protected at 50% overhead.
+- `skipped N groups`: groups this window that were deliberately left unprotected to stay
+  within the cap. A non-zero value means the cap is doing its job; a persistently large one
+  means the packets or groups are too small - raise `max_group_size` or the cap.
 
 ## 9. Configuration
 
@@ -198,8 +235,8 @@ defaults, and `"fec": {"enabled": false}` disables it on that endpoint.
   "fec": {
     "enabled": true,
     "max_overhead_percent": 10,
-    "max_group_size": 16,
-    "max_parity_rows": 1
+    "max_group_size": 32,
+    "max_parity_rows": 2
   }
 }
 ```

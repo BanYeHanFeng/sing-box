@@ -101,9 +101,15 @@ activity are skipped). It is written at debug level, and promoted to info level 
 most once a minute per connection - when packets were actually repaired:
 
 ```
-QUICX FEC: path loss 3.4%, group 13 (overhead 7.7%), repaired 128, unrecoverable 9,
-  parity 96 sent / 91 received, protected 1200 packets (14.2 KB parity data)
+QUICX FEC: tx loss 3.4% (peer reported), group 13 rows 2, overhead 15.4% configured / 6.0% measured,
+  protected 1200 pkts (195.3 KB), parity 96 pkts (14.2 KB), skipped 2 groups;
+  rx repaired 128, unrecoverable 9, parity 91 pkts, protected 1400 pkts
 ```
+
+The `tx` column is the direction this endpoint **sends** on (the loss rate is measured by
+the peer and reported back); the `rx` column is the direction it **receives** on. They are
+measured by different endpoints, so don't read them as one number. `skipped` counts the
+groups that were deliberately left unprotected to stay within the cap.
 
 #### fec.enabled
 
@@ -114,21 +120,31 @@ endpoint.
 
 Upper bound of the parity traffic, as a percentage of the protected traffic.
 
-`10` is used by default. FEC never exceeds this bound, no matter how lossy the path is.
+`10` is used by default. The bound applies to the parity **bytes actually sent**: when a
+group is too small, or the packet sizes are too skewed, to fit into it, FEC leaves that
+group unprotected (see `skipped` in the statistics line) instead of exceeding the bound.
 
 #### fec.max_group_size
 
 Maximum number of packets protected by one FEC group.
 
-`16` is used by default. Larger groups reduce the relative overhead, but increase the
+`32` is used by default. Larger groups reduce the relative overhead, but increase the
 time until a lost packet can be repaired.
+
+It has to be large enough to fit `max_parity_rows` parity rows within the cap, otherwise
+the extra rows are never used (with the default `32` / `10%`, two rows cost about 6.8%
+and do get used).
 
 #### fec.max_parity_rows
 
 Maximum number of parity rows per group.
 
-`1` (the default) repairs a single loss per group (XOR parity, RAID 5 style), `2`
-repairs two losses per group (Reed-Solomon parity over GF(2^8), RAID 6 style).
+`2` (the default) repairs two losses per group (Reed-Solomon parity over GF(2^8),
+RAID 6 style); `1` repairs only a single loss per group (XOR parity, RAID 5 style).
+
+Losses on mobile paths come in bursts: with a single row, a group with two or more
+missing packets loses all of them (in a 15.7 hour production log `unrecoverable` was 2 to
+2.5 times `repaired`), which is why two rows are the default.
 
 #### tls
 
