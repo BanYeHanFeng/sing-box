@@ -126,7 +126,7 @@ jobs:
                 "server_port": 18443,
                 "password": "test",
                 "fec": { "scheme": "auto" },
-                "tls": { "enabled": true, "server_name": "localhost", "alpn": ["h3"] }
+                "tls": { "enabled": true, "server_name": "localhost", "insecure": true, "alpn": ["h3"] }
               }
             ]
           }
