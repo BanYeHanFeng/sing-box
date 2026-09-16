@@ -13,7 +13,7 @@
   "fec": {
     "enabled": true,
     "max_overhead_percent": 10,
-    "max_group_size": 64,
+    "max_group_size": 128,
     "max_parity_rows": 2
   },
   "network": "tcp",
@@ -83,7 +83,7 @@ activity are skipped). It is written at debug level, and promoted to info level 
 most once a minute per connection - when packets were actually repaired:
 
 ```
-QUICX FEC: tx loss 3.4% (peer reported), window 64 pkts, rate 5.0% / 4.8% measured,
+QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 5.0% / 4.8% measured,
   protected 1200 pkts (1.4 MB), parity 96 pkts (112.5 KB), skipped 2 rows, dropped 0 frames;
   rx repaired 128, unrecoverable 9, parity 91 pkts, protected 1400 pkts
 ```

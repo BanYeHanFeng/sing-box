@@ -33,7 +33,7 @@ RLC 草案的思路，但在本实现里用确定性系数和长度奇偶校验�
 
 ### 2.1 编码端
 
-- 窗口 = 最近 `max_group_size` 个**承载应用数据**的包（默认 64）。纯 ACK / 只更新流控的包
+- 窗口 = 最近 `max_group_size` 个**承载应用数据**的包（默认 128）。纯 ACK / 只更新流控的包
   不进窗口：它们不携带对端还不知道的信息，保护它们没有意义，而且校验符号长度取窗口内最长
   成员，混进小包只会让每一行都按大数据包的身长发；
 - 按目标冗余率 `rate` 发校验行：每收进约 `1/rate` 个包发一行，`rate = min(1.5 × 实测丢包率,
@@ -80,20 +80,26 @@ FEC_WINDOW_REPAIR (0x34)：
 ### 2.5 能修多少（容量）
 
 一个包在窗口里停留 `W` 个包，期间会经过约 `W × rate` 行，所以**可修突发长度约为
-`W × rate`**（`rate` 已被上限压住）。默认 `W=64`、1200 字节包、10% 上限时：
+`W × rate`**（`rate` 已被上限压住）。默认 `W=128`、1200 字节包、10% 上限时：
 
 | 实测丢包 p | 目标 rate | 覆盖行数 ≈ W×rate | 窗口内期望丢包 W×p | 单突发可修 |
 | --- | --- | --- | --- | --- |
 | < 0.2% | 0（关闭） | 0 | — | — |
-| 1% | 1.5% | 0.96 | 0.64 | ~1 |
-| 2% | 3% | 1.9 | 1.3 | ~2 |
-| 5% | 7.5% | 4.8 | 3.2 | ~4 |
-| 10% | 9.7%（封顶） | 6.2 | 6.4 | ~6 |
-| 20% | 9.7%（封顶） | 6.2 | 12.8 | ~6（修不全，靠重传） |
+| 1% | 1.5% | 1.9 | 1.3 | ~2 |
+| 2% | 3% | 3.8 | 2.6 | ~4 |
+| 5% | 7.5% | 9.6 | 6.4 | ~9 |
+| 10% | 9.4%（封顶） | 12.0 | 12.8 | ~12 |
+| 20% | 9.4%（封顶） | 12.0 | 25.6 | ~12（修不全，靠重传） |
 
 要点：**窗口方案同样受信息论限制**——上限 10% 时无法修 20% 的随机丢包，能修的突发长度
-约 6 个连续包。突发修不回来时多余校验行仍然"没白花"的部分在于：它们修回了能修的那些包，
+约 12 个连续包。突发修不回来时多余校验行仍然"没白花"的部分在于：它们修回了能修的那些包，
 剩下的交回重传。
+
+两点决定突发链路上这份容量能否真正用上：**冗余由最近 1 秒内的丢包峰值驱动**，而不是平滑
+后的估计值——突发只被上报一次、其后的报告都是干净的，而平滑估计每次只向样本走一部分，既会
+把冗余压到实际需要的一半以下，又会在突发的包还留在窗口里时就衰减回零；**窗口取的是协议上限**，
+更短的窗口即使把攒下的额度全花掉也付不起这么长的突发，因为突发所需的修复行必须在它的包离开
+窗口之前发出去。
 
 ### 2.6 协商
 
@@ -127,7 +133,7 @@ FEC_WINDOW_REPAIR (0x34)：
 FEC 只在两端都开启时才生效（客户端声明、服务端确认）。字段说明见
 [出站](outbound/quicx.zh.md#fec)与[入站](inbound/quicx.zh.md#fec)文档。
 
-- `max_group_size`：窗口大小（默认 `64`）；
+- `max_group_size`：窗口大小（默认 `128`）；
 - `max_parity_rows`：空闲补尾行数（默认 `2`，上限 2）；
 - `max_overhead_percent`：**整条连接的字节比例上限**（额度制）：每进一个被保护包增加
   `上限 × 包字节` 的额度（总额度封顶 32 KB），每发一行扣掉该行的实际字节；
@@ -138,8 +144,8 @@ FEC 只在两端都开启时才生效（客户端声明、服务端确认）。�
 协商完成后两端各输出一条 debug 日志，带对端地址：
 
 ```
-QUICX FEC enabled (server, 203.0.113.9:41234, sliding window scheme, max overhead 10%, window 64, tail rows 2)
-QUICX FEC enabled (client, 198.51.100.7:30010, sliding window scheme, max overhead 10%, window 64, tail rows 2)
+QUICX FEC enabled (server, 203.0.113.9:41234, sliding window scheme, max overhead 10%, window 128, tail rows 2)
+QUICX FEC enabled (client, 198.51.100.7:30010, sliding window scheme, max overhead 10%, window 128, tail rows 2)
 ```
 
 **每个 QUIC 连接一条，不是每个客户端或每个进程一条**。FEC 是连接级协商（客户端在鉴权请求里
@@ -156,7 +162,7 @@ QUICX FEC enabled (client, 198.51.100.7:30010, sliding window scheme, max overhe
 运行期间每 10 秒输出一条统计（窗口内没有任何 FEC 活动时不输出）：
 
 ```
-QUICX FEC: tx loss 3.4% (peer reported), window 64 pkts, rate 7.7% / 7.2% measured,
+QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 7.7% / 7.2% measured,
   protected 1200 pkts (1.4 MB), parity 96 pkts (118.2 KB), skipped 2 rows, dropped 0 frames;
   rx repaired 128, unrecoverable 9, parity 91 pkts, protected 1400 pkts
 ```

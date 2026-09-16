@@ -43,7 +43,7 @@ packets into fixed groups.
 
 ### 2.1 Sender
 
-- the window is the last `max_group_size` packets (64 by default) that carry application
+- the window is the last `max_group_size` packets (128 by default) that carry application
   data. Packets that only acknowledge packets, or that only update flow control state, are
   not added: they carry information the peer already has, and since a parity symbol is as
   long as the longest member of the window, mixing in small packets would only make every
@@ -113,21 +113,30 @@ one burst; what limits spending in normal operation is the target redundancy rat
 
 A packet stays in the window for W packets, during which about `W * rate` rows cover it, so
 the recoverable burst length is about `W * rate` (with `rate` already capped). With the
-default `W = 64`, 1200 byte packets and a 10% cap:
+default `W = 128`, 1200 byte packets and a 10% cap:
 
 | measured loss p | target rate | covering rows | expected losses in the window | recoverable burst |
 | --- | --- | --- | --- | --- |
 | < 0.2% | 0 (idle) | 0 | - | - |
-| 1% | 1.5% | 0.96 | 0.64 | ~1 |
-| 2% | 3% | 1.9 | 1.3 | ~2 |
-| 5% | 7.5% | 4.8 | 3.2 | ~4 |
-| 10% | 9.7% (capped) | 6.2 | 6.4 | ~6 |
-| 20% | 9.7% (capped) | 6.2 | 12.8 | ~6, the rest falls back to retransmission |
+| 1% | 1.5% | 1.9 | 1.3 | ~2 |
+| 2% | 3% | 3.8 | 2.6 | ~4 |
+| 5% | 7.5% | 9.6 | 6.4 | ~9 |
+| 10% | 9.4% (capped) | 12.0 | 12.8 | ~12 |
+| 20% | 9.4% (capped) | 12.0 | 25.6 | ~12, the rest falls back to retransmission |
 
 The information theoretic limit still applies: a 10% cap cannot repair 20% random loss, and
-a burst longer than about six consecutive packets is not repaired either. The extra rows
+a burst longer than about twelve consecutive packets is not repaired either. The extra rows
 are still not wasted when a burst is too long: they repair the packets they can, and the
 rest falls back to retransmission.
+
+Two details decide whether that capacity is actually used on a bursty path. The redundancy
+is derived from the **peak loss rate of the last second**, not from the smoothed estimate:
+a burst is reported once and the reports after it are clean, and the smoothed estimate only
+moves a fraction of the way to a sample, so it would both under-drive the redundancy and
+decay while the packets of the burst are still inside the window. The window is also as
+large as it gets: a shorter window cannot pay for a burst of this length even with the
+credit it accumulated, because the rows a burst needs have to be spent before its packets
+leave the window.
 
 ### 2.6 Negotiation
 
@@ -174,13 +183,13 @@ request and FEC is only turned on once the server confirmed it.
   "fec": {
     "enabled": true,
     "max_overhead_percent": 10,
-    "max_group_size": 64,
+    "max_group_size": 128,
     "max_parity_rows": 2
   }
 }
 ```
 
-- `max_group_size`: the window size (64 by default);
+- `max_group_size`: the window size (128 by default);
 - `max_parity_rows`: the number of repair rows an idle sender emits for the tail of its
   window (2 by default, at most 2);
 - `max_overhead_percent`: the byte ratio cap for the whole connection (credit based):
@@ -197,8 +206,8 @@ the individual fields.
 Both sides log a debug line once FEC is negotiated, including the peer address:
 
 ```
-QUICX FEC enabled (server, 203.0.113.9:41234, sliding window scheme, max overhead 10%, window 64, tail rows 2)
-QUICX FEC enabled (client, 198.51.100.7:30010, sliding window scheme, max overhead 10%, window 64, tail rows 2)
+QUICX FEC enabled (server, 203.0.113.9:41234, sliding window scheme, max overhead 10%, window 128, tail rows 2)
+QUICX FEC enabled (client, 198.51.100.7:30010, sliding window scheme, max overhead 10%, window 128, tail rows 2)
 ```
 
 **One line per QUIC connection, not per client or per process.** FEC is negotiated per
@@ -223,7 +232,7 @@ While FEC is enabled, a statistics line is written every 10 seconds (windows wit
 any FEC activity are skipped):
 
 ```
-QUICX FEC: tx loss 3.4% (peer reported), window 64 pkts, rate 7.7% / 7.2% measured,
+QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 7.7% / 7.2% measured,
   protected 1200 pkts (1.4 MB), parity 96 pkts (118.2 KB), skipped 2 rows, dropped 0 frames;
   rx repaired 128, unrecoverable 9, parity 91 pkts, protected 1400 pkts
 ```

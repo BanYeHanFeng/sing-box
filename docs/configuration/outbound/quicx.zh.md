@@ -13,7 +13,7 @@
   "fec": {
     "enabled": true,
     "max_overhead_percent": 10,
-    "max_group_size": 64,
+    "max_group_size": 128,
     "max_parity_rows": 2
   },
   "network": "tcp",
@@ -77,7 +77,7 @@ BBR 拥塞控制算法配置，可选 `conservative` `standard` `aggressive`。
 包时提升为 info 级别（每连接每分钟最多一条）：
 
 ```
-QUICX FEC: tx loss 3.4% (peer reported), window 64 pkts, rate 5.0% / 4.8% measured,
+QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 5.0% / 4.8% measured,
   protected 1200 pkts (1.4 MB), parity 96 pkts (112.5 KB), skipped 2 rows, dropped 0 frames;
   rx repaired 128, unrecoverable 9, parity 91 pkts, protected 1400 pkts
 ```
@@ -98,7 +98,7 @@ QUICX FEC: tx loss 3.4% (peer reported), window 64 pkts, rate 5.0% / 4.8% measur
 
 #### fec.max_group_size
 
-窗口大小（同时保护的包数），默认 `64`。
+窗口大小（同时保护的包数），默认 `128`。
 
 窗口内同一个包会被约 `窗口大小 × 冗余率` 行校验覆盖，所以窗口越大越能修突发丢包，
 代价是内存（约 `窗口大小 × MTU` / 方向）与校验计算量。
