@@ -286,9 +286,10 @@ QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 7.7% / 7.2% measu
   since DATAGRAM frames are never retransmitted);
 - with very small packets or a very sparse flow the credit never accumulates enough and the
   row header is a large share of the row, so FEC skips the row (`skipped`);
-- to be evaluated: adapting the window size to the RTT, a redundancy rate driven by the
-  burstiness of the loss, long runs on real mobile networks, and a more conservative BBR
-  profile while FEC is on (losses are repaired, so there is no need to be as aggressive).
+- to be evaluated: adapting the window size to the RTT, long runs on real mobile networks,
+  and a more conservative BBR profile while FEC is on (losses are repaired, so there is no
+  need to be as aggressive). A redundancy rate driven by the burstiness of the loss has
+  landed: the redundancy follows the peak loss rate of the last second, see 2.5.
 
 ## 7. Verified in CI
 
@@ -298,11 +299,16 @@ QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 7.7% / 7.2% measu
   loss, four packet bursts, unequal packet sizes, a late packet completing an
   underdetermined equation, the idle tail, acknowledgement-only packets being ignored, the
   overhead cap, and repair frame round-trip/truncation/invalid input;
+- a regression test for the burst behaviour: after one report of a burst, six clean reports
+  follow, and the redundancy has to stay at the level of the burst. Before the fix it had
+  decayed to 0.077 by the third of them;
 - end-to-end tests over real UDP with loss injection and `-race`: no parity on a clean
   path (`ParityPacketsSent = 0`), recovery at about 12% loss, recovery of bursts of three
-  consecutive packets, non-zero recovery through the GSO send path, and measured overhead
-  within the cap on both endpoints - including a loss rate above what the cap can repair,
-  where the transfer still completes on retransmission and parity stays within the cap.
+  consecutive packets, recovery of bursts of four consecutive packets with the configuration
+  QUICX ships with (the 10% cap and the default window), non-zero recovery through the GSO
+  send path, and measured overhead within the cap on both endpoints - including a loss rate
+  above what the cap can repair, where the transfer still completes on retransmission and
+  parity stays within the cap.
 
 **sing-box `FEC CI`** builds real binaries, starts a QUICX server and client on loopback,
 fetches 2 MB through SOCKS, and checks that both endpoints logged the
@@ -312,9 +318,16 @@ that the client's statistics line reports a non-zero `rx repaired`, i.e. that th
 scheme reconstructed real losses through sing-box + sing-quic + quic-go.
 
 **Not verified yet**: the window scheme's numbers on a real cross-border mobile path
-(`repaired` / `unrecoverable` / `skipped` / throughput over hours), and the trade-off
-between window sizes of 32 and 128. Run `max_group_size` at both values for a while before
-changing the default.
+(`repaired` / `unrecoverable` / `skipped` / throughput over hours). Run `max_group_size` at
+a smaller value for a while before changing the default.
+
+**What the fix came from**: 48 minutes of server logs on a real mobile path showed FEC
+reconstructing **2 packets** out of 35 MB, while the peer reported loss windows of 15%,
+10.5% and 7.5% in the same period, with 0 `unrecoverable` and 0 `dropped`. The repair was
+not failing, it never started: the redundancy was driven by the smoothed estimate, a burst
+is reported once, and the estimate decayed back to zero while the packets of the burst were
+still inside the window, after which no repair row was sent. That does not contradict the
+static capacity - the capacity was there, the input driving it was switched off.
 
 ## 8. Removal of the block scheme (history)
 
