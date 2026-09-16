@@ -19,7 +19,7 @@
   "bbr_profile": "",
   "fec": {
     "enabled": true,
-    "max_overhead_percent": 10,
+    "max_overhead_percent": 20,
     "max_group_size": 16,
     "max_parity_rows": 1
   },
@@ -111,7 +111,7 @@ QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 5.1% / 4.8% measu
 
 冗余流量上限（占被保护流量的百分比）。
 
-默认使用 `10`。该上限约束的是**实际发出的校验字节**：当额度不足以支付一行校验时，FEC 会放弃
+默认使用 `20`。该上限约束的是**实际发出的校验字节**：当额度不足以支付一行校验时，FEC 会放弃
 这一行（见统计里的 `skipped`），而不是超发。
 
 #### fec.max_group_size

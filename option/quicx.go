@@ -50,11 +50,11 @@ type QUICXFECOptions struct {
 	// false to disable FEC on this endpoint.
 	Enabled *bool `json:"enabled,omitempty"`
 	// MaxOverheadPercent caps the repair traffic as a percentage of the protected
-	// traffic. Defaults to 10.
+	// traffic. Defaults to 20.
 	MaxOverheadPercent int `json:"max_overhead_percent,omitempty"`
 	// MaxGroupSize is the number of packets one sliding window protects. Larger values
 	// tolerate longer bursts, but increase the memory FEC uses per connection.
-	// Defaults to 64.
+	// Defaults to 128.
 	MaxGroupSize int `json:"max_group_size,omitempty"`
 	// MaxParityRows is the number of repair rows an idle sender emits for the tail of
 	// its window, so that the packets sent last are protected too. Defaults to 2.

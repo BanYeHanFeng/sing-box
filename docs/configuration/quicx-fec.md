@@ -51,6 +51,12 @@ packets into fixed groups.
 - one repair row is emitted per ~`1/rate` packets, where
   `rate = min(1.5 * measured loss, what the cap allows)`. Below 0.2% loss `rate` is 0 and
   not a single parity packet is sent;
+- **the measured loss rate is an accumulated sample, not a single report**: the peer
+  reports its cumulative counters every 20ms, and on a slow connection one report covers
+  one or two packets, so a single lost packet would read as 50%-100% loss. The sender
+  accumulates the reports until the sample covers `64 packets` (or `500ms` and at least
+  `16 packets`) before accepting it as a measurement, and only an accepted sample changes
+  the redundancy;
 - an idle sender (2ms, `flush_delay`) emits one or two rows for the tail of its window, so
   the last packets of a burst aren't left with very few covering rows;
 - **every row protects the whole current window**, so a packet is covered by all the rows
@@ -113,7 +119,8 @@ one burst; what limits spending in normal operation is the target redundancy rat
 
 A packet stays in the window for W packets, during which about `W * rate` rows cover it, so
 the recoverable burst length is about `W * rate` (with `rate` already capped). With the
-default `W = 128`, 1200 byte packets and a 10% cap:
+default `W = 128`, 1200 byte packets and a 20% cap (which caps the rate at about 18%, since
+the row header is paid out of the same cap):
 
 | measured loss p | target rate | covering rows | expected losses in the window | recoverable burst |
 | --- | --- | --- | --- | --- |
@@ -121,22 +128,29 @@ default `W = 128`, 1200 byte packets and a 10% cap:
 | 1% | 1.5% | 1.9 | 1.3 | ~2 |
 | 2% | 3% | 3.8 | 2.6 | ~4 |
 | 5% | 7.5% | 9.6 | 6.4 | ~9 |
-| 10% | 9.4% (capped) | 12.0 | 12.8 | ~12 |
-| 20% | 9.4% (capped) | 12.0 | 25.6 | ~12, the rest falls back to retransmission |
+| 10% | 15% | 19.2 | 12.8 | ~19 |
+| 12% | 18% (capped) | 23.0 | 15.4 | ~23 |
+| 20% | 18% (capped) | 23.0 | 25.6 | ~23, the rest falls back to retransmission |
 
-The information theoretic limit still applies: a 10% cap cannot repair 20% random loss, and
-a burst longer than about twelve consecutive packets is not repaired either. The extra rows
-are still not wasted when a burst is too long: they repair the packets they can, and the
+The information theoretic limit still applies: a cap of about 18% cannot repair 20% random
+loss, and a burst longer than about 23 consecutive packets is not repaired either. The extra
+rows are still not wasted when a burst is too long: they repair the packets they can, and the
 rest falls back to retransmission.
 
 Two details decide whether that capacity is actually used on a bursty path. The redundancy
-is derived from the **peak loss rate of the last second**, not from the smoothed estimate:
-a burst is reported once and the reports after it are clean, and the smoothed estimate only
-moves a fraction of the way to a sample, so it would both under-drive the redundancy and
-decay while the packets of the burst are still inside the window. The window is also as
-large as it gets: a shorter window cannot pay for a burst of this length even with the
-credit it accumulated, because the rows a burst needs have to be spent before its packets
-leave the window.
+is derived from the **peak loss rate measured by a sample that is large enough**, not from
+the smoothed estimate: a burst is reported once and the reports after it are clean, and the
+smoothed estimate only moves a fraction of the way to a sample, so it would both under-drive
+the redundancy and decay while the packets of the burst are still inside the window. The hold
+of that peak runs **from the sample that measured it and is never extended by the clean
+reports that follow it** - the `50.0%` plateaus that lasted for minutes in the production log
+came from the opposite: every report used to move the deadline, so one noisy sample pinned
+the redundancy at the cap for as long as the connection stayed active. The hold is
+`max(1 second, the window's span in time)`, capped at 3 seconds: a slow connection fills its
+window over several seconds and its bursts need the redundancy that long, but a single burst
+must not become a permanent cost. The window is also as large as it gets: a shorter window
+cannot pay for a burst of this length even with the credit it accumulated, because the rows a
+burst needs have to be spent before its packets leave the window.
 
 ### 2.6 Negotiation
 
@@ -182,7 +196,7 @@ request and FEC is only turned on once the server confirmed it.
   "type": "quicx",
   "fec": {
     "enabled": true,
-    "max_overhead_percent": 10,
+    "max_overhead_percent": 20,
     "max_group_size": 128,
     "max_parity_rows": 2
   }
@@ -192,9 +206,9 @@ request and FEC is only turned on once the server confirmed it.
 - `max_group_size`: the window size (128 by default);
 - `max_parity_rows`: the number of repair rows an idle sender emits for the tail of its
   window (2 by default, at most 2);
-- `max_overhead_percent`: the byte ratio cap for the whole connection (credit based):
-  every protected packet adds `cap * packet bytes` to the credit (capped at 32 KB in
-  total), and every row subtracts its actual bytes;
+- `max_overhead_percent`: the byte ratio cap for the whole connection (credit based, 20 by
+  default): every protected packet adds `cap * packet bytes` to the credit (capped at 32 KB
+  in total), and every row subtracts its actual bytes;
 - `fec.scheme` has been removed: there is only one scheme to run, and a config that sets
   the field is rejected as an unknown field.
 
@@ -206,8 +220,8 @@ the individual fields.
 Both sides log a debug line once FEC is negotiated, including the peer address:
 
 ```
-QUICX FEC enabled (server, 203.0.113.9:41234, sliding window scheme, max overhead 10%, window 128, tail rows 2)
-QUICX FEC enabled (client, 198.51.100.7:30010, sliding window scheme, max overhead 10%, window 128, tail rows 2)
+QUICX FEC enabled (server, 203.0.113.9:41234, sliding window scheme, max overhead 20%, window 128, tail rows 2)
+QUICX FEC enabled (client, 198.51.100.7:30010, sliding window scheme, max overhead 20%, window 128, tail rows 2)
 ```
 
 **One line per QUIC connection, not per client or per process.** FEC is negotiated per
@@ -247,16 +261,22 @@ QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 7.7% / 7.2% measu
   one number**:
   - `tx loss` is the loss rate of the direction this endpoint **sends** on, measured by the
     **peer** from packet number gaps (including packets FEC repaired, i.e. the real path
-    quality). The `protected`/`parity`/`rate`/`skipped` fields next to it describe this
+    quality). It is the smoothed value of samples that were large enough to measure the
+    path: the peer reports every 20ms and the sender accumulates the reports until the
+    sample covers `64 packets` (or `500ms` and at least `16 packets`), so on a slow
+    connection the number is a real ratio over a second or so instead of the ratio of one
+    20ms report. The `protected`/`parity`/`rate`/`skipped` fields next to it describe this
     endpoint's sending side;
   - `rx repaired`/`rx unrecoverable` are what this endpoint's decoder saw on the direction
     it **receives** on (`unrecoverable` counts only packets parity couldn't repair, which
     fall back to QUIC retransmission); `rx parity`/`rx protected` are the received parity
     packet and protected packet counts.
 - `rate ... / ... measured`: the first value is the sender's current target redundancy
-  rate (about `1.5 * measured loss`, lowered by the cap), the second is the **measured**
-  `parity bytes / protected bytes`. The cap applies to the measured value, and since it is
-  accumulated over the whole connection, the `measured` value cannot exceed the cap.
+  rate (about `1.5 * measured loss`, lowered by the cap), the second is
+  `parity bytes / protected bytes` **of this window**. The cap applies to the ratio
+  accumulated over the whole connection (the byte credit), so a single 10 second window can
+  exceed it - small windows that pay for a tail row show values like `244.2% measured`. To
+  check the cap, accumulate a whole log rather than trusting one window.
 - `skipped N rows`: repair rows this window that were deliberately not sent because the
   byte credit couldn't pay for them. A non-zero value means the cap is doing its job; a
   persistently large one means the packets or the flow are too small - consider raising
@@ -289,7 +309,8 @@ QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 7.7% / 7.2% measu
 - to be evaluated: adapting the window size to the RTT, long runs on real mobile networks,
   and a more conservative BBR profile while FEC is on (losses are repaired, so there is no
   need to be as aggressive). A redundancy rate driven by the burstiness of the loss has
-  landed: the redundancy follows the peak loss rate of the last second, see 2.5.
+  landed: the redundancy follows the peak measured by a sample large enough to measure the
+  path, held for `max(1 second, the window's span)`, see 2.5.
 
 ## 7. Verified in CI
 
@@ -302,10 +323,15 @@ QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 7.7% / 7.2% measu
 - a regression test for the burst behaviour: after one report of a burst, six clean reports
   follow, and the redundancy has to stay at the level of the burst. Before the fix it had
   decayed to 0.077 by the third of them;
+- regression tests for the estimator (a production failure): one lost packet among 26
+  reports of one packet each has to be measured as `1/26` (about 3.8%), not as the 100% of
+  the single report it arrived in; clean reports that keep arriving must release the
+  redundancy of a burst once its hold is over instead of extending it forever; and the hold
+  follows the window's span on a slow connection, bounded by its maximum;
 - end-to-end tests over real UDP with loss injection and `-race`: no parity on a clean
   path (`ParityPacketsSent = 0`), recovery at about 12% loss, recovery of bursts of three
   consecutive packets, recovery of bursts of four consecutive packets with the configuration
-  QUICX ships with (the 10% cap and the default window), non-zero recovery through the GSO
+  QUICX ships with (the 20% cap and the default window), non-zero recovery through the GSO
   send path, and measured overhead within the cap on both endpoints - including a loss rate
   above what the cap can repair, where the transfer still completes on retransmission and
   parity stays within the cap.
@@ -317,17 +343,25 @@ the clean path. It then repeats the transfer with `tc netem loss 12%` on `lo` an
 that the client's statistics line reports a non-zero `rx repaired`, i.e. that the window
 scheme reconstructed real losses through sing-box + sing-quic + quic-go.
 
-**Not verified yet**: the window scheme's numbers on a real cross-border mobile path
-(`repaired` / `unrecoverable` / `skipped` / throughput over hours). Run `max_group_size` at
-a smaller value for a while before changing the default.
+**Not verified yet**: the window scheme's long run benefit on a real cross-border mobile path -
+how many repairs it actually saves relative to the loss that really happened. That
+measurement only means something once the estimator is fixed, see below.
 
-**What the fix came from**: 48 minutes of server logs on a real mobile path showed FEC
-reconstructing **2 packets** out of 35 MB, while the peer reported loss windows of 15%,
-10.5% and 7.5% in the same period, with 0 `unrecoverable` and 0 `dropped`. The repair was
-not failing, it never started: the redundancy was driven by the smoothed estimate, a burst
-is reported once, and the estimate decayed back to zero while the packets of the burst were
-still inside the window, after which no repair row was sent. That does not contradict the
-static capacity - the capacity was there, the input driving it was switched off.
+**What the estimator fix came from**: 55 minutes of server logs on a real mobile path
+(about 48 packets per second) plus the matching client log showed the server sending 169584
+protected packets (131.0 MB) with 8540 parity packets (10.64 MB, 8.12%) and repairing **64
+packets** in total; the client repaired **62** on the uplink while its own decoder counted
+**0 `unrecoverable`**, i.e. the downlink lost almost nothing. At the same time the server
+reported `tx loss 50.0%` for **73 windows in a row (12 minutes)**. Aligning both logs by time
+accounts for 93903 of the 94517 protected packets the server sent while FEC was active
+(**99.4%**), so the loss was in the estimator, not on the path: the peer reports every 20ms
+and a report covers about one packet at that rate, so one lost packet read as 100% and one of
+two as 50%, while the old code moved the peak's deadline on **every** report - a single noisy
+sample pinned `rate = min(1.5 * 50%, cap)` at the cap for as long as reports kept arriving.
+The exact `50.0%` plateaus in the log are the fingerprint of an EWMA converging on a constant
+input. For contrast, an earlier 45 minute client log on the same path reported 0% in 99% of
+its windows and FEC stayed idle in 247 of 270 windows, so "no parity on a clean path" did
+work whenever the estimator was quiet.
 
 ## 8. Removal of the block scheme (history)
 
