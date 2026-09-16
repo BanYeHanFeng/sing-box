@@ -111,6 +111,7 @@ func buildFECOptions(options *option.QUICXFECOptions) *quicx.FECOptions {
 	}
 	fecOptions := &quicx.FECOptions{}
 	if options != nil {
+		fecOptions.Scheme = options.Scheme
 		fecOptions.MaxOverheadPercent = options.MaxOverheadPercent
 		fecOptions.MaxGroupSize = options.MaxGroupSize
 		fecOptions.MaxParityRows = options.MaxParityRows

@@ -19,9 +19,10 @@
   "bbr_profile": "",
   "fec": {
     "enabled": true,
+    "scheme": "auto",
     "max_overhead_percent": 10,
-    "max_group_size": 16,
-    "max_parity_rows": 1
+    "max_group_size": 64,
+    "max_parity_rows": 2
   },
   "tls": {
     "enabled": true,
@@ -111,33 +112,61 @@ the peer and reported back); the `rx` column is the direction it **receives** on
 measured by different endpoints, so don't read them as one number. `skipped` counts the
 groups that were deliberately left unprotected to stay within the cap.
 
+With the sliding window scheme, `group … rows …` becomes `window N pkts`, the configured
+value becomes `rate x%`, and `skipped` counts rows:
+
+```
+QUICX FEC: tx loss 3.4% (peer reported), window 64 pkts, rate 5.1% / 4.8% measured,
+  protected 1200 pkts (1.4 MB), parity 61 pkts (76.3 KB), skipped 2 rows, dropped 0 frames;
+  rx repaired 128, unrecoverable 9, parity 58 pkts, protected 1400 pkts
+```
+
 #### fec.enabled
 
 Whether to enable FEC. Defaults to `true`; set it to `false` to disable FEC on this
 endpoint.
+
+#### fec.scheme
+
+Which FEC scheme to use.
+
+- `auto` (the default): this endpoint supports both the **sliding window scheme** and the
+  **block scheme**, and the server picks the best one both endpoints implement (new
+  connections therefore use the sliding window scheme);
+- `window`: only the sliding window scheme;
+- `block`: only the block scheme.
+
+When the two endpoints have no scheme in common, FEC stays off on both sides and the
+connection works as usual. See
+[QUICX FEC](../quicx-fec.md#10-the-sliding-window-scheme) for the negotiation.
 
 #### fec.max_overhead_percent
 
 Upper bound of the parity traffic, as a percentage of the protected traffic.
 
 `10` is used by default. The bound applies to the parity **bytes actually sent**: when a
-group is too small, or the packet sizes are too skewed, to fit into it, FEC leaves that
-group unprotected (see `skipped` in the statistics line) instead of exceeding the bound.
+group is too small, the packet sizes are too skewed, or (with the sliding window scheme)
+the byte budget doesn't cover a row, FEC skips that parity (see `skipped` in the statistics
+line) instead of exceeding the bound.
 
 #### fec.max_group_size
 
-Maximum number of packets protected by one FEC group.
+Block scheme: the maximum number of packets protected by one FEC group, `32` by default.
+Larger groups reduce the relative overhead, but increase the time until a lost packet can
+be repaired.
 
-`32` is used by default. Larger groups reduce the relative overhead, but increase the
-time until a lost packet can be repaired.
+Sliding window scheme: the window size, `64` by default. Every packet stays in the window
+for that many packets and is covered by about `window * redundancy` rows, so a larger
+window recovers longer bursts - at the cost of memory (about `window * MTU` per direction)
+and parity computation.
 
-It has to be large enough to fit `max_parity_rows` parity rows within the cap, otherwise
-the extra rows are never used (with the default `32` / `10%`, two rows cost about 6.8%
-and do get used).
+With the block scheme the value has to be large enough to fit `max_parity_rows` parity rows
+within the cap, otherwise the extra rows are never used (with the default `32` / `10%`, two
+rows cost about 6.8% and do get used).
 
 #### fec.max_parity_rows
 
-Maximum number of parity rows per group.
+Block scheme: the maximum number of parity rows per group.
 
 `2` (the default) repairs two losses per group (Reed-Solomon parity over GF(2^8),
 RAID 6 style); `1` repairs only a single loss per group (XOR parity, RAID 5 style).
@@ -145,6 +174,9 @@ RAID 6 style); `1` repairs only a single loss per group (XOR parity, RAID 5 styl
 Losses on mobile paths come in bursts: with a single row, a group with two or more
 missing packets loses all of them (in a 15.7 hour production log `unrecoverable` was 2 to
 2.5 times `repaired`), which is why two rows are the default.
+
+Sliding window scheme: the number of repair rows an idle sender emits for the tail of its
+window (`2` by default).
 
 #### tls
 

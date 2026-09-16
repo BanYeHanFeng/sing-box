@@ -58,7 +58,7 @@ jobs:
                 "listen": "127.0.0.1",
                 "listen_port": 18443,
                 "users": [{ "name": "test", "password": "test" }],
-                "fec": { "max_overhead_percent": 10, "max_group_size": 16, "max_parity_rows": 1 },
+                "fec": { "scheme": "auto", "max_overhead_percent": 10, "max_group_size": 16, "max_parity_rows": 1 },
                 "tls": {
                   "enabled": true,
                   "certificate_path": "cert.pem",
@@ -86,6 +86,98 @@ jobs:
           EOF
           ./dist/sing-box check -c fec-test.json
           echo "配置解析通过"
+      - name: 端到端：协商滑动窗口方案并验证干净链路零冗余
+        run: |
+          set -euo pipefail
+          cat > fec-server.json <<'EOF'
+          {
+            "log": { "level": "debug" },
+            "inbounds": [
+              {
+                "type": "quicx",
+                "tag": "quicx-in",
+                "listen": "127.0.0.1",
+                "listen_port": 18443,
+                "users": [{ "name": "test", "password": "test" }],
+                "fec": { "scheme": "auto" },
+                "tls": {
+                  "enabled": true,
+                  "certificate_path": "cert.pem",
+                  "key_path": "key.pem",
+                  "alpn": ["h3"]
+                }
+              }
+            ],
+            "outbounds": [{ "type": "direct", "tag": "direct" }]
+          }
+          EOF
+          cat > fec-client.json <<'EOF'
+          {
+            "log": { "level": "debug" },
+            "inbounds": [
+              { "type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 11080 }
+            ],
+            "outbounds": [
+              {
+                "type": "quicx",
+                "tag": "quicx-out",
+                "server": "127.0.0.1",
+                "server_port": 18443,
+                "password": "test",
+                "fec": { "scheme": "auto" },
+                "tls": { "enabled": true, "server_name": "localhost", "alpn": ["h3"] }
+              }
+            ]
+          }
+          EOF
+          ./dist/sing-box check -c fec-server.json
+          ./dist/sing-box check -c fec-client.json
+          mkdir -p www
+          dd if=/dev/urandom of=www/payload.bin bs=1M count=2 status=none
+          (cd www && python3 -m http.server 18080 --bind 127.0.0.1 > ../http.log 2>&1) &
+          ./dist/sing-box run -c fec-server.json > server.log 2>&1 &
+          SERVER_PID=$!
+          sleep 2
+          ./dist/sing-box run -c fec-client.json > client.log 2>&1 &
+          CLIENT_PID=$!
+          trap 'kill ${CLIENT_PID} ${SERVER_PID} 2>/dev/null || true' EXIT
+          sleep 3
+          curl -sS --socks5-hostname 127.0.0.1:11080 -o downloaded.bin http://127.0.0.1:18080/payload.bin
+          cmp downloaded.bin www/payload.bin
+          echo "经 SOCKS → QUICX 的 2 MB 传输一致"
+          # 两端都必须协商到滑动窗口方案，客户端那行同时证明确认消息带回了所选方案
+          grep -q "QUICX FEC enabled (server, .*sliding window scheme" server.log
+          grep -q "QUICX FEC enabled (client, .*sliding window scheme" client.log
+          echo "两端协商结果：滑动窗口方案"
+          # 干净链路不发一个校验包：窗口方案只在实测丢包时才发校验行
+          if grep -q "QUICX FEC: tx loss" client.log; then
+            echo "干净链路上出现了 FEC 活动：" >&2
+            grep "QUICX FEC: tx loss" client.log >&2
+            exit 1
+          fi
+          echo "干净链路零冗余确认"
+      - name: 端到端：丢包链路（lo + netem，可用时）
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          if ! sudo tc qdisc add dev lo root netem loss 12%; then
+            echo "netem 不可用，跳过丢包端到端检查"
+            exit 0
+          fi
+          trap 'sudo tc qdisc del dev lo root 2>/dev/null || true' EXIT
+          ./dist/sing-box run -c fec-server.json > server-lossy.log 2>&1 &
+          SERVER_PID=$!
+          sleep 2
+          ./dist/sing-box run -c fec-client.json > client-lossy.log 2>&1 &
+          CLIENT_PID=$!
+          trap 'kill ${CLIENT_PID} ${SERVER_PID} 2>/dev/null || true; sudo tc qdisc del dev lo root 2>/dev/null || true' EXIT
+          sleep 3
+          curl -sS --socks5-hostname 127.0.0.1:11080 -o downloaded-lossy.bin http://127.0.0.1:18080/payload.bin
+          cmp downloaded-lossy.bin www/payload.bin
+          # 统计行每 10 秒一条，修复过包时提升为 info：等一个窗口再断言
+          sleep 12
+          grep -E "rx repaired [1-9]" client-lossy.log
+          echo "12% 丢包下客户端确实重建了丢包"
       - name: 格式检查（仅报告）
         run: |
           files="option/quicx.go protocol/quicx/inbound.go protocol/quicx/outbound.go"
