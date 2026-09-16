@@ -135,14 +135,30 @@ jobs:
           mkdir -p www
           dd if=/dev/urandom of=www/payload.bin bs=1M count=2 status=none
           (cd www && python3 -m http.server 18080 --bind 127.0.0.1 > ../http.log 2>&1) &
+          HTTP_PID=$!
           ./dist/sing-box run -c fec-server.json > server.log 2>&1 &
           SERVER_PID=$!
           sleep 2
           ./dist/sing-box run -c fec-client.json > client.log 2>&1 &
           CLIENT_PID=$!
-          trap 'kill ${CLIENT_PID} ${SERVER_PID} 2>/dev/null || true' EXIT
+          dump_logs() {
+            echo "===== server.log ====="; tail -40 server.log || true
+            echo "===== client.log ====="; tail -40 client.log || true
+            echo "===== http.log ====="; tail -10 http.log || true
+          }
+          trap 'dump_logs; kill ${CLIENT_PID} ${SERVER_PID} ${HTTP_PID} 2>/dev/null || true' EXIT
           sleep 3
-          curl -sS --socks5-hostname 127.0.0.1:11080 -o downloaded.bin http://127.0.0.1:18080/payload.bin
+          # The origin has to answer directly before it is reached through the proxy.
+          curl -sS -o /dev/null http://127.0.0.1:18080/payload.bin
+          echo "直连 HTTP 源站正常"
+          # The first QUICX dial can race the server's readiness: retry a few times.
+          for attempt in 1 2 3 4 5; do
+            if curl -sS --socks5-hostname 127.0.0.1:11080 -o downloaded.bin http://127.0.0.1:18080/payload.bin; then
+              break
+            fi
+            echo "第 ${attempt} 次经代理请求失败，重试"
+            sleep 3
+          done
           cmp downloaded.bin www/payload.bin
           echo "经 SOCKS → QUICX 的 2 MB 传输一致"
           # 两端都必须协商到滑动窗口方案，客户端那行同时证明确认消息带回了所选方案
