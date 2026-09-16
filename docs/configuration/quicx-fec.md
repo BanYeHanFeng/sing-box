@@ -14,9 +14,10 @@ There is one scheme: the **sliding window scheme**. Repair rows are generated
 continuously for the most recent W packets that carry application data, so a lost packet is
 covered by many rows and bursts are reconstructed row by row. The **block scheme** this
 fork used to implement (a closed group of packets protected by a fixed number of parity
-rows) has been removed: its two structural weaknesses cannot be fixed by tuning, while the
-window scheme covers all of its capabilities. Sections 2 to 9 are kept as the design notes
-and measurements of that removed scheme; section 10 describes the current behaviour.
+rows) has been removed from quic-go, sing-quic and sing-box: its two structural weaknesses
+cannot be fixed by tuning, while the window scheme covers all of its capabilities. This
+page therefore describes the current implementation only; the design notes and measurements
+of the removed scheme were deleted along with it (section 8).
 
 ## 1. How Hysteria2 survives loss, and what it costs
 
@@ -33,162 +34,171 @@ QUICX (without FEC) uses a BBR-like congestion controller: losses are seen, the 
 is reduced, and recovery costs roughly a round trip. FEC repairs the loss instead, without
 adding pointless traffic.
 
-## 2. From RAID to packet level erasure codes
+## 2. The sliding window scheme
 
-- RAID 5: k data blocks plus one XOR parity block - any single missing block can be
-  recomputed;
-- RAID 6 / Reed-Solomon: k data blocks plus m parity blocks - any m missing blocks can be
-  recomputed (a linear system over GF(2^8)).
+The scheme keeps a continuously rolling **window** of the most recent packets (the idea
+behind the elastic window of RFC 9407 Tetrys and the IETF sliding window RLC drafts,
+implemented here with deterministic coefficients and a length parity) instead of closing
+packets into fixed groups.
 
-Mapped to QUIC, a "block" is a **fully encrypted QUIC packet** (header included):
+### 2.1 Sender
 
-- the sender groups k consecutive 1-RTT packets, computes m parity packets (`m = 1` is
-  plain XOR, RAID 5 style; `m >= 2` is a Vandermonde/Reed-Solomon parity over GF(2^8),
-  RAID 6 style) and sends them as regular QUIC packets;
-- the receiver caches the packets it recently received. When a parity packet arrives and a
-  member of its group is missing, it reconstructs the **exact wire bytes** of the missing
-  packet and feeds them back into the normal decryption and packet handling path;
-- the repaired packet is acknowledged like a packet that arrived on the wire, so the
-  sender's loss detection never sees it: no retransmission, no congestion window
-  reduction.
+- the window is the last `max_group_size` packets (64 by default) that carry application
+  data. Packets that only acknowledge packets, or that only update flow control state, are
+  not added: they carry information the peer already has, and since a parity symbol is as
+  long as the longest member of the window, mixing in small packets would only make every
+  row as long as the data packets next to them;
+- one repair row is emitted per ~`1/rate` packets, where
+  `rate = min(1.5 * measured loss, what the cap allows)`. Below 0.2% loss `rate` is 0 and
+  not a single parity packet is sent;
+- an idle sender (2ms, `flush_delay`) emits one or two rows for the tail of its window, so
+  the last packets of a burst aren't left with very few covering rows;
+- **every row protects the whole current window**, so a packet is covered by all the rows
+  that follow it: a loss is not "one group's problem" but has a chance to be repaired by
+  the next `W / step` rows.
 
-Packets in a group have different sizes, so members are zero-extended to the longest
-member before the parity is computed; the length of every member travels in the repair
-frame (1-2 bytes each), which is what allows the receiver to truncate a recovered packet
-back to its original size.
+### 2.2 Repair row format and coefficients
 
-## 3. Why this works in QUIC
+```
+FEC_WINDOW_REPAIR (0x34):
+  row | first packet number | span | member bitmap | member count | parity length | length parity (2B) | parity data
+```
 
-| Problem | Solution |
-| --- | --- |
-| Packet numbers / header protection | The parity is computed over the **sealed packet bytes**, so a recovered packet is directly decryptable |
-| Variable packet sizes | Zero extension plus a length list in the repair frame |
-| The parity packet must fit the MTU | Protected packets are limited to `MTU - header reserve` (about 63 bytes with `max_group_size=16`), so the parity packet fits |
-| Recovery must happen before retransmission | The receiver caches roughly `2 x max_group_size` packets; the parity packet is sent right after a group closes, usually well before loss detection (>= 1 RTT) |
-| Late / duplicate packets | A recovered packet that later arrives for real is dropped by QUIC's regular duplicate detection |
-| Congestion accounting | Parity packets use the normal send path: they count toward bytes in flight and the congestion window, and are only sent when the send loop is allowed to send (they never bypass congestion control) |
-| Key updates | The cache is dropped when the key phase changes |
-| Compatibility / camouflage | No QUIC transport parameter is used (a private transport parameter would show up in the ClientHello and break the Chrome / HTTP/3 fingerprint). FEC is negotiated in QUICX's own control plane, and a peer that doesn't know the FEC frames **ignores** them instead of failing the connection |
+- a row carries a **bitmap** of member packet numbers instead of a packet number list:
+  packet numbers inside a window are nearly consecutive (the numbers spent on parity
+  packets simply stay clear), so one bit per packet number - about 9-10 bytes at
+  `window=64`;
+- **lengths are not listed per member**: the members' wire lengths are combined with the
+  same coefficients over GF(2^8) and only two bytes are sent. The length is 16 bit and its
+  two bytes are solved by the same equations as the packet, so recovering a packet recovers
+  its length at the same time;
+- the coefficients form a **Cauchy matrix** over GF(2^8): `c(row, position) = 1 / (x_row +
+  y_position)`, with row basis `x = α^0..α^63` and position basis `y = α^64..α^191`
+  (disjoint, so no denominator is zero). Every square submatrix of a Cauchy matrix is
+  invertible, so any n rows reconstruct any n members of the window for **any** loss
+  pattern.
 
-## 4. Adaptive redundancy: no blind bandwidth
+### 2.3 Receiver: incremental elimination and peeling
 
-This is the main difference to `brutal`:
+- when a repair row arrives, the contributions of the members that did arrive are
+  subtracted from it, which leaves one equation over the packets that are still missing;
+- the equations are reduced by incremental Gaussian elimination: rows with the same pivot
+  are subtracted from each other, and a row that is down to a single unknown solves that
+  packet directly;
+- **a reconstructed packet is treated like a packet that arrived on the wire**: it goes
+  back into the normal decryption and packet handling path (and is acknowledged normally),
+  and it is substituted into the remaining equations as a known symbol - so a burst is
+  peeled apart packet by packet as later rows arrive, instead of depending on one group;
+- **late packets are substituted as well**: a packet that arrives late can turn an
+  underdetermined equation into a solvable one immediately, without waiting for the next
+  row;
+- packets that are still missing after one second are counted as `unrecoverable`
+  (`FailedPackets`) and fall back to QUIC retransmission.
 
-1. the **receiver measures** the packet loss rate of the path from gaps in the 1-RTT
-   packet number sequence (a packet only counts as lost once it is 8 packets behind,
-   so reordering is not mistaken for loss);
-2. it reports the counters **every 20ms** (cumulative counters, so a lost report frame
-   costs accuracy for nothing);
-3. the **sender** smooths the reports with an EWMA (alpha = 0.3) and asks for
-   `1.5 x loss rate` redundancy. It uses two Reed-Solomon parity rows when the loss rate
-   is at least 12% (or the requirement at least 25%) and the group size limit can pay for
-   them, one row otherwise. It derives the group size `k` from the requirement, counting
-   the `FEC_REPAIR` frame header (estimated from an EWMA of the packet size) - without
-   that, a group that is exactly at the cap would be rejected by the budget for its
-   header alone and FEC would stop working precisely where it is needed most;
-4. below 0.2% loss FEC is **completely off**: `k = 0`, not a single parity packet
-   (verified in CI: `ParityPacketsSent = 0` on a clean path);
-5. a partial group is protected after 2ms of idle time, so the last packets of a burst
-   aren't left unprotected;
-6. all of the above only decides what FEC *wants* to send. Every group also has to **pay
-   for its own parity** (section 5); when it can't, it stays unprotected (counted as
-   `skipped`) instead of overspending.
+### 2.4 How the overhead cap is enforced
 
-## 5. Overhead, and how the cap is actually enforced
+The window scheme uses a **byte credit**: every protected packet adds `cap * packet bytes`
+to the credit, and sending a row subtracts that row's actual bytes. A row the credit cannot
+pay for is skipped (counted in `skipped`). Because only earned bytes can be spent,
 
-**The cap bounds bytes, and it is applied per group.** A group is only protected when
-`parity bytes <= group bytes * max_overhead_percent`; otherwise it is left unprotected and
-counted in `skipped`. Because every group stays within the cap, so does **any** aggregation
-of them - a window, a connection - which is what makes the `measured` value in the
-statistics line directly checkable against the cap.
+> `parity bytes / protected bytes <= max_overhead_percent` holds **over the whole
+> connection**, and the `measured` value in the statistics line can be checked against the
+> cap directly.
 
-The check is per group rather than against a running budget on purpose. A running budget
-also bounds the long run ratio, but it lets credit earned earlier pay for groups that are
-structurally not worth protecting: packets so small that the `FEC_REPAIR` header dominates,
-and groups too small to be worth a parity packet. A production run showed "2 packets (54 B)
-protected by 1 parity packet (41 B)", and in its worst window 94 of 375 protected packets
-could not be repaired at all. Those groups are unlikely to be repaired whatever FEC does
-for them, so the bandwidth is better left unspent.
+The credit is capped (32 KB) so that credit earned on a long clean stretch is not dumped in
+one burst; what limits spending in normal operation is the target redundancy rate `rate`
+(about 1.5 x loss), and the credit only enforces "never more than the cap".
 
-Within that budget, redundancy is about `m / k` (m parity rows over k data packets). With
-the defaults `k <= 32`, `m <= 2`, and 1200 byte packets:
+### 2.5 Capacity
 
-| Measured loss p | Required redundancy 1.5p | Rows m | Group k | Nominal overhead m/k | Two losses in a group |
-| --- | --- | --- | --- | --- | --- |
-| < 0.2% | - | - | off | 0 | - |
-| 1% | 1.5% | 1 | 32 | 3.1% | not repaired |
-| 2% | 3% | 1 | 32 | 3.1% | not repaired |
-| 5% | 7.5% | 1 | 13 | 7.7% | not repaired |
-| 10% | 15% (capped at 10%) | 1 | 11 | 9.1% | not repaired |
-| 12% | 18% (capped at 10%) | 2 | 22 | 9.1% | **repaired** |
-| >= 20% | 30% (capped at 10%) | 2 | 22 | 9.1% | **repaired** |
+A packet stays in the window for W packets, during which about `W * rate` rows cover it, so
+the recoverable burst length is about `W * rate` (with `rate` already capped). With the
+default `W = 64`, 1200 byte packets and a 10% cap:
 
-Notes:
+| measured loss p | target rate | covering rows | expected losses in the window | recoverable burst |
+| --- | --- | --- | --- | --- |
+| < 0.2% | 0 (idle) | 0 | - | - |
+| 1% | 1.5% | 0.96 | 0.64 | ~1 |
+| 2% | 3% | 1.9 | 1.3 | ~2 |
+| 5% | 7.5% | 4.8 | 3.2 | ~4 |
+| 10% | 9.7% (capped) | 6.2 | 6.4 | ~6 |
+| 20% | 9.7% (capped) | 6.2 | 12.8 | ~6, the rest falls back to retransmission |
 
-- redundancy comes in steps of `1/k`, so at very low loss rates the actual overhead is a
-  few times the loss rate (3.1% at 1%). Larger `k` lowers the floor, at the cost of a
-  longer repair delay and a higher chance of a burst landing inside one group;
-- **two parity rows have to fit**: `2/max_group_size` must be within
-  `max_overhead_percent`, otherwise that branch is never taken. With the default `32` /
-  `10%` two rows cost about 6.8% including the frame header and are used; with
-  `max_group_size: 16` two rows need `max_overhead_percent >= 13`;
-- **a single row can't repair bursts**: two or more losses in one group leave the whole
-  group unrepaired (the decoder counts *every* missing packet of such a group as
-  `unrecoverable`). Losses on mobile paths come in bursts, which is why two rows are now
-  the default;
-- **small packets and small groups are left unprotected on purpose**: a parity packet
-  carries a frame header (up to 112 bytes with `max_group_size=32`) plus the short header
-  and AEAD tag every QUIC packet spends (about 30-50 bytes), so with tiny packets or tiny
-  groups the parity would exceed 10% of that group's bytes and FEC skips it (`skipped`).
-  Refusing to repair one group beats overspending. The flip side: **packets of around
-  27 bytes cannot be protected at all under a 10% cap** - that traffic relies on QUIC
-  retransmission, or on a larger `max_overhead_percent`;
-- FEC also reduces the maximum protected packet size by one frame header reserve plus one
-  packet overhead (about 112 + 48 bytes with `max_group_size=32`). That cost exists only
-  while FEC is active, i.e. only on lossy paths.
+The information theoretic limit still applies: a 10% cap cannot repair 20% random loss, and
+a burst longer than about six consecutive packets is not repaired either. The extra rows
+are still not wasted when a burst is too long: they repair the packets they can, and the
+rest falls back to retransmission.
 
-## 6. Comparison with HY2 `brutal`
+### 2.6 Negotiation
+
+- the client appends a one byte capability flag to its authentication request: `0x02` is
+  the sliding window scheme (the only scheme this version implements);
+- the server appends the selected scheme after `CommandFECAccept` (also `0x02`), and the
+  client only enables FEC when it reads that byte back and it matches the scheme it
+  announced;
+- an **old client** that only announces the block scheme flag (`0x01`) has no scheme in
+  common with a new server, so **FEC stays off on both sides** and the connection works as
+  usual;
+- a new client talking to an **old server** that only knows the block scheme fails to
+  negotiate in the same way, so FEC stays off (it is never sent window frames it cannot
+  decode);
+- an intermediate version that implemented both schemes and announced `0x03` still
+  interoperates: it supports `0x02`, so both ends run the window scheme;
+- the confirmation **must** carry the scheme byte: a client that cannot read it, or reads a
+  different value, does not enable FEC (it never falls back to enabling one scheme by
+  default).
+
+## 3. Comparison with HY2 `brutal`
 
 | | HY2 `brutal` | QUICX FEC |
 | --- | --- | --- |
 | Mechanism | Fixed high send rate + retransmission | Proactive erasure coding + retransmission as a fallback |
-| Bandwidth cost | Bound to the configured rate, permanently | About the measured loss rate, bounded by a configured cap |
+| Bandwidth cost | Bound to the configured rate, permanently | About the measured loss rate, bounded by a configured cap (zero on a clean path) |
 | Idle / clean path | Still sends at the configured rate | **Zero redundancy** |
 | Congestion control | Bypassed | Fully respected, parity counts toward cwnd |
-| Recovery latency | About one round trip | As soon as the parity packet arrives |
-| Bursty loss | Retransmission | One loss per group (two with `max_parity_rows: 2`) |
+| Recovery latency | About one round trip | As soon as a repair row arrives (peeled row by row) |
+| Bursty loss | Retransmission | About `W * rate` consecutive losses, peeled row by row |
 | Traffic signature | Constant high rate, easy to spot | Same shape as regular QUIC traffic, plus a few small packets |
+| Fit | Lossy, long haul paths | The same, but when not burning bandwidth or attracting QoS matters |
 
-## 7. Measurements on a real lossy path
+## 4. Configuration
 
-Next to the CI tests, end-to-end measurements were run with a binary built by the release
-pipeline, over a `veth` link with `tc netem loss 12%` (per packet, in both directions,
-GSO enabled): a 3MB HTTP download through the QUICX proxy and 150 UDP round trips.
+FEC is **enabled by default**: omitting the `fec` section keeps it enabled with the
+defaults, and `"fec": {"enabled": false}` disables it on that endpoint. It only takes
+effect if both endpoints enable it: the client announces support in its authentication
+request and FEC is only turned on once the server confirmed it.
 
-| Configuration | TCP 3MB median | UDP delivery (150 round trips) |
-| --- | --- | --- |
-| FEC off | 233 ms | 109/150 = 72.7% |
-| FEC on (default 10% cap) | 241 ms | **116/150 = 77.3%** |
-| FEC on (25% cap) | 299 ms | 116/150 = 77.3% |
+```json
+{
+  "type": "quicx",
+  "fec": {
+    "enabled": true,
+    "max_overhead_percent": 10,
+    "max_group_size": 64,
+    "max_parity_rows": 2
+  }
+}
+```
 
-- **UDP / DATAGRAM relay**: FEC directly improves delivery (+4.6 percentage points here).
-  DATAGRAM frames are never retransmitted, so a lost one is lost forever; erasure coding is
-  the only way to get it back on the receiver side.
-- **TCP streams**: QUIC streams retransmit and BBR tolerates 12% loss; FEC doesn't help
-  throughput there. At the default 10% cap it is roughly free (241ms vs 233ms), at a 25% cap
-  it is clearly slower (299ms) - the extra parity is pure waste. For interactive,
-  request/response traffic the win is one round trip of recovery latency, not throughput.
-- Recommended deployment: prefer FEC for UDP. Either use two outbounds with
-  `"network": "udp"` (FEC on) and `"network": "tcp"` (FEC off), or enable it globally with
-  the default 10% cap.
+- `max_group_size`: the window size (64 by default);
+- `max_parity_rows`: the number of repair rows an idle sender emits for the tail of its
+  window (2 by default, at most 2);
+- `max_overhead_percent`: the byte ratio cap for the whole connection (credit based):
+  every protected packet adds `cap * packet bytes` to the credit (capped at 32 KB in
+  total), and every row subtracts its actual bytes;
+- `fec.scheme` has been removed: there is only one scheme to run, and a config that sets
+  the field is rejected as an unknown field.
 
-## 8. Logging
+See the [outbound](outbound/quicx.md#fec) and [inbound](inbound/quicx.md#fec) pages for
+the individual fields.
+
+## 5. Logging
 
 Both sides log a debug line once FEC is negotiated, including the peer address:
 
 ```
-QUICX FEC enabled (server, 203.0.113.9:41234, max overhead 10%, max group 32, parity rows 2)
-QUICX FEC enabled (client, 198.51.100.7:30010, max overhead 10%, max group 32, parity rows 2)
+QUICX FEC enabled (server, 203.0.113.9:41234, sliding window scheme, max overhead 10%, window 64, tail rows 2)
+QUICX FEC enabled (client, 198.51.100.7:30010, sliding window scheme, max overhead 10%, window 64, tail rows 2)
 ```
 
 **One line per QUIC connection, not per client or per process.** FEC is negotiated per
@@ -213,8 +223,8 @@ While FEC is enabled, a statistics line is written every 10 seconds (windows wit
 any FEC activity are skipped):
 
 ```
-QUICX FEC: tx loss 3.4% (peer reported), group 13 rows 2, overhead 7.7% configured / 7.2% measured,
-  protected 1200 pkts (1.4 MB), parity 96 pkts (118.2 KB), skipped 2 groups, dropped 0 frames;
+QUICX FEC: tx loss 3.4% (peer reported), window 64 pkts, rate 7.7% / 7.2% measured,
+  protected 1200 pkts (1.4 MB), parity 96 pkts (118.2 KB), skipped 2 rows, dropped 0 frames;
   rx repaired 128, unrecoverable 9, parity 91 pkts, protected 1400 pkts
 ```
 
@@ -228,152 +238,76 @@ QUICX FEC: tx loss 3.4% (peer reported), group 13 rows 2, overhead 7.7% configur
   one number**:
   - `tx loss` is the loss rate of the direction this endpoint **sends** on, measured by the
     **peer** from packet number gaps (including packets FEC repaired, i.e. the real path
-    quality). The `protected`/`parity`/`overhead`/`skipped` fields next to it describe this
+    quality). The `protected`/`parity`/`rate`/`skipped` fields next to it describe this
     endpoint's sending side;
   - `rx repaired`/`rx unrecoverable` are what this endpoint's decoder saw on the direction
     it **receives** on (`unrecoverable` counts only packets parity couldn't repair, which
     fall back to QUIC retransmission); `rx parity`/`rx protected` are the received parity
     packet and protected packet counts.
-- `overhead ... configured / ... measured`: the first value is the `m/k` **configuration**,
-  the second is the **measured** `parity bytes / protected bytes`. The cap applies to the
-  measured value; printing only the configured one hides problems such as a partial group
-  being protected at 50% overhead.
-- `skipped N groups`: groups this window that were deliberately left unprotected to stay
-  within the cap. A non-zero value means the cap is doing its job; a persistently large one
-  means the packets or groups are too small - raise `max_group_size` or the cap.
+- `rate ... / ... measured`: the first value is the sender's current target redundancy
+  rate (about `1.5 * measured loss`, lowered by the cap), the second is the **measured**
+  `parity bytes / protected bytes`. The cap applies to the measured value, and since it is
+  accumulated over the whole connection, the `measured` value cannot exceed the cap.
+- `skipped N rows`: repair rows this window that were deliberately not sent because the
+  byte credit couldn't pay for them. A non-zero value means the cap is doing its job; a
+  persistently large one means the packets or the flow are too small - consider raising
+  `max_overhead_percent`.
 - `dropped N frames`: parity frames discarded this window because the send queue stayed
   busy for too long. It should be zero; a growing value means FEC is not actually
   protecting anything on that side (a saturated upload or download), so check whether the
-  link is simply maxed out.
+  link is simply maxed out, or lower the FEC window size.
 
-## 9. Configuration
+## 6. Limitations
 
-FEC is **enabled by default**: omitting the `fec` section keeps it enabled with the
-defaults, and `"fec": {"enabled": false}` disables it on that endpoint.
+- only 1-RTT application data packets are protected; the handshake and 0-RTT are not (the
+  handshake has retransmission of its own);
+- only packets that carry application data are protected; packets that only acknowledge
+  packets or update flow control state are not added to the window (protecting them has no
+  value, and it would only make every row as long as the data packets next to them);
+- parity packets are lost as well (at loss rate p, redundancy is effective about `1 - p` of
+  the time), so FEC improves the delivery probability, it doesn't guarantee it;
+- how many rows cover a packet is decided by the redundancy rate (about
+  `window * rate` rows, minus the rows that are lost themselves); when the measured loss
+  rate approaches the redundancy the cap allows, there are not enough equations and
+  noticeably more packets fall back to QUIC retransmission. That is the deliberate
+  trade-off of the cap: better to leave a packet unrepaired than to overspend;
+- QUIC streams retransmit, so the value of FEC for TCP traffic is **saving a round trip of
+  recovery latency and avoiding a congestion control misjudgement**, not replacing
+  retransmission (for UDP/DATAGRAM relay FEC is the only way to get a lost packet back,
+  since DATAGRAM frames are never retransmitted);
+- with very small packets or a very sparse flow the credit never accumulates enough and the
+  row header is a large share of the row, so FEC skips the row (`skipped`);
+- to be evaluated: adapting the window size to the RTT, a redundancy rate driven by the
+  burstiness of the loss, long runs on real mobile networks, and a more conservative BBR
+  profile while FEC is on (losses are repaired, so there is no need to be as aggressive).
 
-```json
-{
-  "type": "quicx",
-  "fec": {
-    "enabled": true,
-    "max_overhead_percent": 10,
-    "max_group_size": 64,
-    "max_parity_rows": 2
-  }
-}
-```
+## 7. Verified in CI
 
-FEC has to be enabled on both sides; the client announces support in its authentication
-request and only enables FEC once the server confirmed it, so enabling it on one side
-never wastes bandwidth. See the [outbound](outbound/quicx.md#fec) and
-[inbound](inbound/quicx.md#fec) pages for the individual fields.
+**quic-go `FEC CI`** (GitHub Actions, all green):
 
-## 10. The sliding window scheme
+- unit tests: a Cauchy MDS assertion over arbitrary row and member combinations, single
+  loss, four packet bursts, unequal packet sizes, a late packet completing an
+  underdetermined equation, the idle tail, acknowledgement-only packets being ignored, the
+  overhead cap, and repair frame round-trip/truncation/invalid input;
+- end-to-end tests over real UDP with loss injection and `-race`: no parity on a clean
+  path (`ParityPacketsSent = 0`), recovery at about 12% loss, recovery of bursts of three
+  consecutive packets, non-zero recovery through the GSO send path, and measured overhead
+  within the cap on both endpoints - including a loss rate above what the cap can repair,
+  where the transfer still completes on retransmission and parity stays within the cap.
 
-The block scheme has two structural weaknesses that parameter tuning cannot remove, and
-both showed up in production logs:
-
-- **All or nothing per group.** A group of k packets protected by m parity rows is either
-  fully repaired or not repaired at all: a group that loses more than m packets gives up
-  every one of its missing packets to retransmission. Mobile paths lose packets in bursts,
-  so most groups lose one or two packets while a few lose more - and the few dominate the
-  `unrecoverable` count.
-- **The tail and low rate flows cannot pay for parity.** A group is only protected when
-  its own parity bytes fit into the overhead cap, so the last packets before an idle
-  period, and the flows whose packets are small or sparse, are skipped - on a path that is
-  losing packets exactly then.
-
-The sliding window scheme replaces the group with a **window**:
-
-- the sender keeps the last `max_group_size` packets (64 by default) that carry
-  application data, and emits one repair row per ~`1/rate` packets, where
-  `rate = min(1.5 * measured loss, what the cap allows)`. Below 0.2% loss `rate` is 0 and
-  not a single parity packet is sent. An idle sender (2ms) emits one or two rows for the
-  tail of its window;
-- **every row protects the whole current window**, so a lost packet is covered by about
-  `W * rate` rows instead of exactly m: a burst is reconstructed row by row as the rows
-  arrive, rather than depending on one group;
-- a row carries a **bitmap** of member packet numbers (about one bit per packet number,
-  since the packet numbers spent on parity packets simply stay clear) plus a two byte
-  **length parity** - the GF(2^8) combination of the members' wire lengths, so a recovered
-  packet's length is solved together with the packet instead of being listed per member;
-- the coefficients form a **Cauchy matrix** over GF(2^8): `1 / (x_row + y_position)`. Every
-  square submatrix of a Cauchy matrix is invertible, so any n rows reconstruct any n
-  members of the window for **any** loss pattern;
-- the decoder turns each row into an equation over the packets it is still missing, does
-  incremental Gaussian elimination, and reconstructs a packet as soon as an equation
-  reduces to a single unknown. A reconstructed packet is then treated like a packet that
-  arrived on the wire: it is acknowledged normally, and it is used as a known symbol by
-  the rows that follow. A packet that arrives late is substituted into the pending
-  equations as well, which can make a lost packet recoverable immediately;
-- packets that only acknowledge packets, or that only update flow control state, are not
-  protected: they carry information the peer already has, and their small size would still
-  make every parity symbol as long as the data packets next to them.
-
-**The overhead bound** is a byte credit rather than a per group decision: every protected
-packet adds `cap * packet bytes` to the credit, and a row is only sent when the credit
-covers its actual size. Because only earned bytes can be spent, the measured parity/protected
-ratio stays within `max_overhead_percent` over the whole connection, and the `measured`
-value in the statistics line can be checked against the cap directly.
-
-**Memory.** The sender keeps a copy of every packet in its window, and the receiver caches
-two windows plus slack, so a connection spends roughly two windows of MTU sized packets per
-direction (about 300 KB at the default window of 64, about 600 KB at 128) - somewhat more
-than the block scheme, which keeps one group plus a smaller cache.
-
-**Capacity.** A packet stays in the window for W packets, during which about `W * rate`
-rows cover it, so the recoverable burst length is about `W * rate` (with `rate` already
-capped). With the default `W = 64`, 1200 byte packets and a 10% cap:
-
-| measured loss p | target rate | covering rows | expected losses in the window | recoverable burst |
-| --- | --- | --- | --- | --- |
-| < 0.2% | 0 (idle) | 0 | - | - |
-| 1% | 1.5% | 0.96 | 0.64 | ~1 |
-| 2% | 3% | 1.9 | 1.3 | ~2 |
-| 5% | 7.5% | 4.8 | 3.2 | ~4 |
-| 10% | 9.7% (capped) | 6.2 | 6.4 | ~6 |
-| 20% | 9.7% (capped) | 6.2 | 12.8 | ~6, the rest falls back to retransmission |
-
-The information theoretic limit still applies: a 10% cap cannot repair 20% random loss. What
-the window scheme changes is that a burst of up to about `W * rate` consecutive packets is
-recoverable (the block scheme repairs at most m per group of k and gives up the whole group
-when a burst is longer).
-
-**Negotiation.** The client announces the window scheme with a capability byte (`0x02`),
-the server enables FEC when the client announced it and echoes the scheme after
-`CommandFECAccept`. A peer that only knows the removed block scheme (`0x01`) has no scheme
-in common, so FEC stays off on both sides and the connection works as usual - it is never
-sent frames it cannot decode. Versions that announced both schemes (`0x03`) interoperate:
-they implement the window scheme, so both ends run it.
-
-**Configuration.** `fec.scheme` has been removed: there is only one scheme to run.
-`max_group_size` is the window size (64 by default); `max_parity_rows` is the number of
-repair rows an idle sender emits for the tail of its window (2 by default).
-
-**Verified in CI** (GitHub Actions, all green): a Cauchy MDS assertion over arbitrary row
-and member combinations, single loss, four packet bursts, unequal packet sizes, a late
-packet completing an underdetermined equation, the idle tail, acknowledgement-only packets
-being ignored, the overhead cap, and repair frame round-trip/truncation/invalid input as
-unit tests; plus end-to-end tests over real UDP with loss injection and `-race`: no parity
-on a clean path, recovery at about 12% loss, recovery of bursts of three consecutive
-packets, non-zero recovery through the GSO send path, and measured overhead within the cap
-on both endpoints - including a loss rate above what the cap can repair, where the transfer
-still completes on retransmission and parity stays within the cap.
-
-The full stack is verified end to end as well: the sing-box FEC CI builds real binaries,
-starts a QUICX server and client on loopback, fetches 2 MB through SOCKS, and checks that
-both endpoints logged the `sliding window scheme` negotiation and that the client logged no
-FEC activity at all on the clean path. It then repeats the transfer with
-`tc netem loss 12%` on `lo` and checks that the client's statistics line reports a non-zero
-`rx repaired`, i.e. that the window scheme reconstructed real losses through
-sing-box + sing-quic + quic-go.
+**sing-box `FEC CI`** builds real binaries, starts a QUICX server and client on loopback,
+fetches 2 MB through SOCKS, and checks that both endpoints logged the
+`sliding window scheme` negotiation and that the client logged no FEC activity at all on
+the clean path. It then repeats the transfer with `tc netem loss 12%` on `lo` and checks
+that the client's statistics line reports a non-zero `rx repaired`, i.e. that the window
+scheme reconstructed real losses through sing-box + sing-quic + quic-go.
 
 **Not verified yet**: the window scheme's numbers on a real cross-border mobile path
 (`repaired` / `unrecoverable` / `skipped` / throughput over hours), and the trade-off
 between window sizes of 32 and 128. Run `max_group_size` at both values for a while before
 changing the default.
 
-## 11. Removal of the block scheme
+## 8. Removal of the block scheme (history)
 
 The three repositories dropped the block scheme in one step and kept only the sliding
 window scheme:
@@ -389,8 +323,12 @@ window scheme:
 - **sing-box**: the `fec.scheme` option is gone, together with the documentation and CI
   coverage of the removed scheme.
 
-The reason is the production review in the history of this page: the block scheme's two
-weaknesses are structural, not a matter of parameters, and the window scheme covers every
-capability it had. The 0x32 frame type is not reused, and the "negotiate between two
-schemes" branch is gone; an upgraded endpoint still interoperates with any version that
-implements the window scheme, and a block-only version simply runs without FEC.
+The reason is what a production log review exposed: the block scheme's two weaknesses are
+structural, not a matter of parameters. A group that loses more packets than it has parity
+rows loses all of them, and the tail of a burst and low rate flows cannot pay for their own
+parity. The window scheme covers every capability the block scheme had, so this page
+describes only the current implementation; the block scheme's design notes and measurements
+were deleted along with the code. The 0x32 frame type is not reused, and the "negotiate
+between two schemes" branch is gone; an upgraded endpoint still interoperates with any
+version that implements the window scheme, and a block-only version simply runs without
+FEC.

@@ -94,7 +94,7 @@ below. It only takes effect if both endpoints enable it: the client announces su
 its authentication request, and FEC is only turned on once the server confirmed it. FEC is
 negotiated **per connection**, so both sides write one `QUICX FEC enabled` debug line
 (including the peer address) for every connection - one more pair per client redial is
-expected (see [QUICX FEC](../quicx-fec.md#8-logging)).
+expected (see [QUICX FEC](../quicx-fec.md#5-logging)).
 
 While FEC is enabled, a statistics line is written every 10 seconds (windows without FEC
 activity are skipped). It is written at debug level, and promoted to info level - at
