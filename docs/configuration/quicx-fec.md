@@ -318,6 +318,11 @@ covers its actual size. Because only earned bytes can be spent, the measured par
 ratio stays within `max_overhead_percent` over the whole connection, and the `measured`
 value in the statistics line can be checked against the cap directly.
 
+**Memory.** The sender keeps a copy of every packet in its window, and the receiver caches
+two windows plus slack, so a connection spends roughly two windows of MTU sized packets per
+direction (about 300 KB at the default window of 64, about 600 KB at 128) - somewhat more
+than the block scheme, which keeps one group plus a smaller cache.
+
 **Capacity.** A packet stays in the window for W packets, during which about `W * rate`
 rows cover it, so the recoverable burst length is about `W * rate` (with `rate` already
 capped). With the default `W = 64`, 1200 byte packets and a 10% cap:

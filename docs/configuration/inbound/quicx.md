@@ -157,8 +157,8 @@ be repaired.
 
 Sliding window scheme: the window size, `64` by default. Every packet stays in the window
 for that many packets and is covered by about `window * redundancy` rows, so a larger
-window recovers longer bursts - at the cost of memory (about `window * MTU` per direction)
-and parity computation.
+window recovers longer bursts - at the cost of memory (roughly two windows of MTU sized
+packets per direction) and parity computation.
 
 With the block scheme the value has to be large enough to fit `max_parity_rows` parity rows
 within the cap, otherwise the extra rows are never used (with the default `32` / `10%`, two
