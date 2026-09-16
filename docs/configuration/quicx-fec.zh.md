@@ -454,6 +454,15 @@ FEC_WINDOW_REPAIR (0x34)：
   下 `recovered > 0`；两端实测开销均在上限内；
 - 分组方案的既有用例全部保留并通过（兼容路径未被破坏）。
 
+**sing-box `FEC CI`（端到端，用发布流水线的方式构建真实二进制）**：
+
+- **干净链路**：`sing-box check` 通过后启动服务端与客户端，经 SOCKS → QUICX 取 2 MB 文件，
+  数据一致；两端日志都出现 `QUICX FEC enabled (... sliding window scheme ...)`，
+  证明能力协商与"服务端选方案、确认消息带回方案"整条链路有效；
+  同时客户端日志里**没有任何 FEC 活动行**——干净链路一个校验包都没发；
+- **丢包链路**：`tc netem loss 12%`（lo）下同样 2 MB 传输数据一致，客户端统计行出现
+  非零 `rx repaired`，即窗口方案在完整 sing-box + sing-quic + quic-go 栈上真的把丢包重建了回来。
+
 **仍未验证的**：窗口方案在真实跨境移动链路上的长时数据（`repaired` / `unrecoverable` /
 `skipped` / 吞吐），以及 `window` 取 32 / 128 的取舍。建议先用 `"scheme": "window"` 与
 `"scheme": "block"` 各跑一段时间对比，再决定是否调整默认 `max_group_size`。

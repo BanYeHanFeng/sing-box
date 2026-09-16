@@ -362,6 +362,14 @@ on a clean path, recovery at about 12% loss, recovery of bursts of three consecu
 packets, and measured overhead within the cap on both endpoints. The block scheme's own
 tests are kept and still pass, so the compatibility path is intact.
 
+The full stack is verified end to end as well: the sing-box FEC CI builds real binaries,
+starts a QUICX server and client on loopback, fetches 2 MB through SOCKS, and checks that
+both endpoints logged the `sliding window scheme` negotiation and that the client logged no
+FEC activity at all on the clean path. It then repeats the transfer with
+`tc netem loss 12%` on `lo` and checks that the client's statistics line reports a non-zero
+`rx repaired`, i.e. that the window scheme reconstructed real losses through
+sing-box + sing-quic + quic-go.
+
 **Not verified yet**: the window scheme's numbers on a real cross-border mobile path
 (`repaired` / `unrecoverable` / `skipped` / throughput over hours), and the trade-off
 between `window` sizes of 32 and 128. Run `"scheme": "window"` and `"scheme": "block"` side
