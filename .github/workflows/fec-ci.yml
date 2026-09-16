@@ -44,7 +44,8 @@ jobs:
         run: |
           set -euo pipefail
           openssl ecparam -genkey -name prime256v1 -out key.pem
-          openssl req -new -x509 -key key.pem -out cert.pem -days 1 -subj "/CN=localhost"
+          openssl req -new -x509 -key key.pem -out cert.pem -days 1 \
+            -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
       - name: QUICX FEC 配置解析检查
         run: |
           set -euo pipefail
