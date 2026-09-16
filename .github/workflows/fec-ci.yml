@@ -59,7 +59,7 @@ jobs:
                 "listen": "127.0.0.1",
                 "listen_port": 18443,
                 "users": [{ "name": "test", "password": "test" }],
-                "fec": { "scheme": "auto", "max_overhead_percent": 10, "max_group_size": 16, "max_parity_rows": 1 },
+                "fec": { "max_overhead_percent": 10, "max_group_size": 16, "max_parity_rows": 1 },
                 "tls": {
                   "enabled": true,
                   "certificate_path": "cert.pem",
@@ -100,7 +100,7 @@ jobs:
                 "listen": "127.0.0.1",
                 "listen_port": 18443,
                 "users": [{ "name": "test", "password": "test" }],
-                "fec": { "scheme": "auto" },
+                "fec": {},
                 "tls": {
                   "enabled": true,
                   "certificate_path": "cert.pem",
@@ -125,7 +125,7 @@ jobs:
                 "server": "127.0.0.1",
                 "server_port": 18443,
                 "password": "test",
-                "fec": { "scheme": "auto" },
+                "fec": {},
                 "tls": { "enabled": true, "server_name": "localhost", "insecure": true, "alpn": ["h3"] }
               }
             ]

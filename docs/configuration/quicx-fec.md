@@ -10,14 +10,13 @@ idea is adaptive redundancy: no parity packet at all is sent on a path that does
 packets, and on a lossy path the amount of redundancy follows the measured loss rate,
 capped by a configurable bound.
 
-There are two schemes, negotiated during the QUICX handshake (section 10):
-
-- the **sliding window scheme** (the default for new connections): repair rows are
-  generated continuously for the most recent W packets that carry application data, so a
-  lost packet is covered by many rows and bursts are reconstructed row by row;
-- the **block scheme** (sections 2 to 9 describe it): a closed group of packets is
-  protected by a fixed number of parity rows. Peers that don't know the window frame fall
-  back to it, and it is never used when both endpoints support the window scheme.
+There is one scheme: the **sliding window scheme**. Repair rows are generated
+continuously for the most recent W packets that carry application data, so a lost packet is
+covered by many rows and bursts are reconstructed row by row. The **block scheme** this
+fork used to implement (a closed group of packets protected by a fixed number of parity
+rows) has been removed: its two structural weaknesses cannot be fixed by tuning, while the
+window scheme covers all of its capabilities. Sections 2 to 9 are kept as the design notes
+and measurements of that removed scheme; section 10 describes the current behaviour.
 
 ## 1. How Hysteria2 survives loss, and what it costs
 
@@ -257,9 +256,8 @@ defaults, and `"fec": {"enabled": false}` disables it on that endpoint.
   "type": "quicx",
   "fec": {
     "enabled": true,
-    "scheme": "auto",
     "max_overhead_percent": 10,
-    "max_group_size": 32,
+    "max_group_size": 64,
     "max_parity_rows": 2
   }
 }
@@ -341,17 +339,16 @@ the window scheme changes is that a burst of up to about `W * rate` consecutive 
 recoverable (the block scheme repairs at most m per group of k and gives up the whole group
 when a burst is longer).
 
-**Negotiation.** The client's capability byte is a bit mask (`0x01` block, `0x02` window),
-the server picks the best scheme both endpoints support and echoes it after
-`CommandFECAccept`. A server that only knows the block scheme ignores the window bit and
-replies without a scheme byte, and the client falls back to the block scheme; when the two
-endpoints have no scheme in common, FEC stays off on both sides. The three repositories can
-therefore be upgraded in any order.
+**Negotiation.** The client announces the window scheme with a capability byte (`0x02`),
+the server enables FEC when the client announced it and echoes the scheme after
+`CommandFECAccept`. A peer that only knows the removed block scheme (`0x01`) has no scheme
+in common, so FEC stays off on both sides and the connection works as usual - it is never
+sent frames it cannot decode. Versions that announced both schemes (`0x03`) interoperate:
+they implement the window scheme, so both ends run it.
 
-**Configuration.** `fec.scheme` is `auto` (default), `window` or `block`.
-`max_group_size` is the number of packets per group (block) or the window size (window,
-default 64); `max_parity_rows` is the number of parity rows per group (block) or the number
-of rows an idle sender emits for the tail of its window (window).
+**Configuration.** `fec.scheme` has been removed: there is only one scheme to run.
+`max_group_size` is the window size (64 by default); `max_parity_rows` is the number of
+repair rows an idle sender emits for the tail of its window (2 by default).
 
 **Verified in CI** (GitHub Actions, all green): a Cauchy MDS assertion over arbitrary row
 and member combinations, single loss, four packet bursts, unequal packet sizes, a late
@@ -359,8 +356,9 @@ packet completing an underdetermined equation, the idle tail, acknowledgement-on
 being ignored, the overhead cap, and repair frame round-trip/truncation/invalid input as
 unit tests; plus end-to-end tests over real UDP with loss injection and `-race`: no parity
 on a clean path, recovery at about 12% loss, recovery of bursts of three consecutive
-packets, and measured overhead within the cap on both endpoints. The block scheme's own
-tests are kept and still pass, so the compatibility path is intact.
+packets, non-zero recovery through the GSO send path, and measured overhead within the cap
+on both endpoints - including a loss rate above what the cap can repair, where the transfer
+still completes on retransmission and parity stays within the cap.
 
 The full stack is verified end to end as well: the sing-box FEC CI builds real binaries,
 starts a QUICX server and client on loopback, fetches 2 MB through SOCKS, and checks that
@@ -372,5 +370,27 @@ sing-box + sing-quic + quic-go.
 
 **Not verified yet**: the window scheme's numbers on a real cross-border mobile path
 (`repaired` / `unrecoverable` / `skipped` / throughput over hours), and the trade-off
-between `window` sizes of 32 and 128. Run `"scheme": "window"` and `"scheme": "block"` side
-by side for a while before changing the default window size.
+between window sizes of 32 and 128. Run `max_group_size` at both values for a while before
+changing the default.
+
+## 11. Removal of the block scheme
+
+The three repositories dropped the block scheme in one step and kept only the sliding
+window scheme:
+
+- **quic-go**: the group encoder/decoder, `FECScheme` (including `FECConfig.Scheme` and
+  `MinGroupSize`), the scheme interface and the `FEC_REPAIR` (0x32) frame with its
+  constants are gone. `FECStats` was renamed accordingly: `GroupSize` became `WindowSize`,
+  `SkippedGroups` became `SkippedRows`, `ConfiguredOverhead` became `RedundancyRate`, and
+  the block-only `Scheme`, `ParityRows` and `ConsideredBytesSent` were removed. The wire
+  format of `FEC_WINDOW_REPAIR` (0x34) and `FEC_FEEDBACK` (0x33) is unchanged;
+- **sing-quic**: `FECOptions.Scheme` is gone, only the window capability (`0x02`) is
+  offered, and the server always confirms the window scheme;
+- **sing-box**: the `fec.scheme` option is gone, together with the documentation and CI
+  coverage of the removed scheme.
+
+The reason is the production review in the history of this page: the block scheme's two
+weaknesses are structural, not a matter of parameters, and the window scheme covers every
+capability it had. The 0x32 frame type is not reused, and the "negotiate between two
+schemes" branch is gone; an upgraded endpoint still interoperates with any version that
+implements the window scheme, and a block-only version simply runs without FEC.

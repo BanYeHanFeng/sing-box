@@ -12,7 +12,6 @@
   "bbr_profile": "",
   "fec": {
     "enabled": true,
-    "scheme": "auto",
     "max_overhead_percent": 10,
     "max_group_size": 64,
     "max_parity_rows": 2
@@ -78,60 +77,38 @@ BBR 拥塞控制算法配置，可选 `conservative` `standard` `aggressive`。
 包时提升为 info 级别（每连接每分钟最多一条）：
 
 ```
-QUICX FEC: tx loss 3.4% (peer reported), group 13 rows 2, overhead 15.4% configured / 6.0% measured,
-  protected 1200 pkts (195.3 KB), parity 96 pkts (14.2 KB), skipped 2 groups, dropped 0 frames;
+QUICX FEC: tx loss 3.4% (peer reported), window 64 pkts, rate 5.0% / 4.8% measured,
+  protected 1200 pkts (1.4 MB), parity 96 pkts (112.5 KB), skipped 2 rows, dropped 0 frames;
   rx repaired 128, unrecoverable 9, parity 91 pkts, protected 1400 pkts
 ```
 
 `tx` 一列是本端**发送**方向（丢包率由对端观测后回传），`rx` 一列是本端**接收**方向；两者由不同
-端点测量，不要混着看。`skipped` 是因超出上限而**主动放弃保护**的分组数。
+端点测量，不要混着看。`skipped` 是因超出上限而**主动放弃保护**的校验行数。
 
 #### fec.enabled
 
 是否启用 FEC。默认 `true`；设为 `false` 可单独在本端关闭（对端也就不会启用）。
 
-#### fec.scheme
-
-选择纠错方案。
-
-- `auto`（默认）：本端同时支持**滑动窗口方案**与**分组方案**，由服务端选择双方都支持的最优方案
-  （新链路因此使用滑动窗口方案）；
-- `window`：只使用滑动窗口方案；
-- `block`：只使用分组方案。
-
-两边没有共同支持的方案时**都不启用 FEC**，连接照常工作。方案协商与窗口方案的行为见
-[QUICX FEC 第 14 节](/zh/configuration/quicx-fec)。
-
 #### fec.max_overhead_percent
 
 冗余流量上限（占被保护流量的百分比）。
 
-默认使用 `10`。该上限约束的是**实际发出的校验字节**：分组太小、包长分布不均，或（窗口方案下）
-额度不够时，FEC 会放弃这次校验（见统计里的 `skipped`），而不是超发。
+默认使用 `10`。该上限约束的是**实际发出的校验字节**：当额度不足以支付一行校验时，FEC 会放弃
+这一行（见统计里的 `skipped`），而不是超发。
 
 #### fec.max_group_size
 
-分组方案：单个 FEC 分组最多保护的包数量，默认 `32`。
-分组越大相对开销越低，但丢包修复的等待时间越长。
+窗口大小（同时保护的包数），默认 `64`。
 
-窗口方案：窗口大小（同时保护的包数），默认 `64`。
 窗口内同一个包会被约 `窗口大小 × 冗余率` 行校验覆盖，所以窗口越大越能修突发丢包，
 代价是内存（约 `窗口大小 × MTU` / 方向）与校验计算量。
 
-分组方案下该值必须大到能在上限内放得下 `max_parity_rows` 行校验，否则多余的行不会被使用
-（默认 `32` / `10%` 下 2 行约占 6.8%，可以启用）。
-
 #### fec.max_parity_rows
 
-分组方案：每个分组最多发送的校验行数。
+发送端空闲时，为窗口尾部补发的校验行数（默认 `2`）。
 
-`2`（默认）每组可修复 2 个丢包（GF(2^8) 上的 Reed-Solomon 校验，类似 RAID 6），
-`1` 每组只能修复 1 个丢包（XOR 校验，类似 RAID 5）。
-
-移动链路上的丢包以突发为主，单行校验遇到"同组内 2 个及以上丢包"时整组都修不回来
-（实测 15.7 小时日志里 `unrecoverable` 是 `repaired` 的 2～2.5 倍），因此默认使用 2 行。
-
-窗口方案：发送端空闲时，为窗口尾部补发的校验行数（默认 `2`）。
+一个包在窗口里停留期间被多少行覆盖取决于冗余率，而最后发出的几个包覆盖行数最少，
+空闲补尾就是为它们准备的；设为 `1` 可以减少空闲时的校验流量，`2` 能多修一个尾部丢包。
 
 #### network
 
