@@ -187,12 +187,20 @@ jobs:
           sleep 2
           ./dist/sing-box run -c fec-client.json > client-lossy.log 2>&1 &
           CLIENT_PID=$!
-          trap 'kill ${CLIENT_PID} ${SERVER_PID} 2>/dev/null || true; sudo tc qdisc del dev lo root 2>/dev/null || true' EXIT
+          # 丢包端到端的断言依赖时序（短传输里 FEC 只有很少时间发校验行），失败时把
+          # 两端的 FEC 统计行打出来，否则日志里只剩一个 exit code 1。
+          dump_lossy_logs() {
+            echo "===== server-lossy.log: QUICX FEC ====="; grep "QUICX FEC" server-lossy.log | tail -20 || true
+            echo "===== client-lossy.log: QUICX FEC ====="; grep "QUICX FEC" client-lossy.log | tail -20 || true
+            echo "===== client-lossy.log: tail ====="; tail -10 client-lossy.log || true
+          }
+          trap 'dump_lossy_logs; kill ${CLIENT_PID} ${SERVER_PID} 2>/dev/null || true; sudo tc qdisc del dev lo root 2>/dev/null || true' EXIT
           sleep 3
           curl -sS --socks5-hostname 127.0.0.1:11080 -o downloaded-lossy.bin http://127.0.0.1:18080/payload.bin
           cmp downloaded-lossy.bin www/payload.bin
           # 统计行每 10 秒一条，修复过包时提升为 info：等一个窗口再断言
           sleep 12
+          grep "QUICX FEC" client-lossy.log | tail -20 || true
           grep -E "rx repaired [1-9]" client-lossy.log
           echo "12% 丢包下客户端确实重建了丢包"
       - name: 格式检查（仅报告）

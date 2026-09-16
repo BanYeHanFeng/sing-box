@@ -54,9 +54,9 @@ packets into fixed groups.
 - **the measured loss rate is an accumulated sample, not a single report**: the peer
   reports its cumulative counters every 20ms, and on a slow connection one report covers
   one or two packets, so a single lost packet would read as 50%-100% loss. The sender
-  accumulates the reports until the sample covers `64 packets` (or `500ms` and at least
-  `16 packets`) before accepting it as a measurement, and only an accepted sample changes
-  the redundancy;
+  accumulates the reports until the sample covers `16 packets` (or holds `8 lost packets`,
+  or has been pending for `500ms` with at least `8 packets`) before accepting it as a
+  measurement, and only an accepted sample changes the redundancy;
 - an idle sender (2ms, `flush_delay`) emits one or two rows for the tail of its window, so
   the last packets of a burst aren't left with very few covering rows;
 - **every row protects the whole current window**, so a packet is covered by all the rows
@@ -263,7 +263,8 @@ QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 7.7% / 7.2% measu
     **peer** from packet number gaps (including packets FEC repaired, i.e. the real path
     quality). It is the smoothed value of samples that were large enough to measure the
     path: the peer reports every 20ms and the sender accumulates the reports until the
-    sample covers `64 packets` (or `500ms` and at least `16 packets`), so on a slow
+    sample covers `16 packets` (or holds `8 lost packets`, or has been pending for `500ms`
+    with at least `8 packets`), so on a slow
     connection the number is a real ratio over a second or so instead of the ratio of one
     20ms report. The `protected`/`parity`/`rate`/`skipped` fields next to it describe this
     endpoint's sending side;
@@ -324,7 +325,7 @@ QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 7.7% / 7.2% measu
   follow, and the redundancy has to stay at the level of the burst. Before the fix it had
   decayed to 0.077 by the third of them;
 - regression tests for the estimator (a production failure): one lost packet among 26
-  reports of one packet each has to be measured as `1/26` (about 3.8%), not as the 100% of
+  reports of one packet each has to be measured as `1/16` (6.25%), not as the 100% of
   the single report it arrived in; clean reports that keep arriving must release the
   redundancy of a burst once its hold is over instead of extending it forever; and the hold
   follows the window's span on a slow connection, bounded by its maximum;
