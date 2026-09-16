@@ -78,7 +78,7 @@ BBR 拥塞控制算法配置，可选 `conservative` `standard` `aggressive`。
 
 ```
 QUICX FEC: tx loss 3.4% (peer reported), group 13 rows 2, overhead 15.4% configured / 6.0% measured,
-  protected 1200 pkts (195.3 KB), parity 96 pkts (14.2 KB), skipped 2 groups;
+  protected 1200 pkts (195.3 KB), parity 96 pkts (14.2 KB), skipped 2 groups, dropped 0 frames;
   rx repaired 128, unrecoverable 9, parity 91 pkts, protected 1400 pkts
 ```
 
