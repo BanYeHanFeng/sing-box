@@ -63,9 +63,10 @@ type QUICXFECOptions struct {
 	MaxParityRows int `json:"max_parity_rows,omitempty"`
 	// BaselineRedundancyPercent keeps a small fixed redundancy on the wire even while
 	// the path looks lossless, so the first burst doesn't have to wait for the peer's
-	// feedback. Bounded by MaxOverheadPercent. Defaults to 0 (a clean path stays idle);
-	// 2-5 is a reasonable value on high-RTT or low-rate links.
-	BaselineRedundancyPercent int `json:"baseline_redundancy_percent,omitempty"`
+	// feedback. Bounded by MaxOverheadPercent. Defaults to 5, a knee for links that
+	// occasionally lose around 8% of packets in a burst; set it explicitly to 0 to
+	// return to a purely reactive path.
+	BaselineRedundancyPercent *int `json:"baseline_redundancy_percent,omitempty"`
 	// RecoveredPacketFeedback reports packets this endpoint reconstructed with FEC back
 	// to the sender, so its congestion controller sees the loss without retransmitting
 	// the packet (RFC 9265, known-lossy-path exception). Off by default; both ends have

@@ -102,6 +102,11 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 	return inbound, nil
 }
 
+// defaultFECBaselineRedundancyPercent keeps a small amount of parity flowing before
+// the peer's first loss report. A pointer in the option distinguishes "not configured"
+// from "configured off", so an explicit 0 still disables the baseline.
+const defaultFECBaselineRedundancyPercent = 5
+
 // buildFECOptions returns the FEC options for the QUICX client and service. FEC is
 // enabled by default; it is only disabled when explicitly turned off in the
 // configuration.
@@ -109,12 +114,16 @@ func buildFECOptions(options *option.QUICXFECOptions) *quicx.FECOptions {
 	if options != nil && options.Enabled != nil && !*options.Enabled {
 		return nil
 	}
-	fecOptions := &quicx.FECOptions{}
+	fecOptions := &quicx.FECOptions{
+		BaselineRedundancyPercent: defaultFECBaselineRedundancyPercent,
+	}
 	if options != nil {
 		fecOptions.MaxOverheadPercent = options.MaxOverheadPercent
 		fecOptions.MaxGroupSize = options.MaxGroupSize
 		fecOptions.MaxParityRows = options.MaxParityRows
-		fecOptions.BaselineRedundancyPercent = options.BaselineRedundancyPercent
+		if options.BaselineRedundancyPercent != nil {
+			fecOptions.BaselineRedundancyPercent = *options.BaselineRedundancyPercent
+		}
 		fecOptions.RecoveredPacketFeedback = options.RecoveredPacketFeedback
 	}
 	return fecOptions

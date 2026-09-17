@@ -87,7 +87,7 @@ jobs:
           EOF
           ./dist/sing-box check -c fec-test.json
           echo "配置解析通过"
-      - name: 端到端：协商滑动窗口方案并验证干净链路零冗余
+      - name: 端到端：协商滑动窗口方案并验证显式关闭保底冗余时干净链路零冗余
         run: |
           set -euo pipefail
           cat > fec-server.json <<'EOF'
@@ -100,7 +100,7 @@ jobs:
                 "listen": "127.0.0.1",
                 "listen_port": 18443,
                 "users": [{ "name": "test", "password": "test" }],
-                "fec": {},
+                "fec": { "baseline_redundancy_percent": 0 },
                 "tls": {
                   "enabled": true,
                   "certificate_path": "cert.pem",
@@ -125,7 +125,7 @@ jobs:
                 "server": "127.0.0.1",
                 "server_port": 18443,
                 "password": "test",
-                "fec": {},
+                "fec": { "baseline_redundancy_percent": 0 },
                 "tls": { "enabled": true, "server_name": "localhost", "insecure": true, "alpn": ["h3"] }
               }
             ]
@@ -166,13 +166,13 @@ jobs:
           grep -q "QUICX FEC enabled (server, .*sliding window scheme" server.log
           grep -q "QUICX FEC enabled (client, .*sliding window scheme" client.log
           echo "两端协商结果：滑动窗口方案"
-          # 干净链路不发一个校验包：窗口方案只在实测丢包时才发校验行
+          # 显式关闭保底冗余后，干净链路不发一个校验包：窗口方案只在实测丢包时才发校验行
           if grep -q "QUICX FEC: tx loss" client.log; then
             echo "干净链路上出现了 FEC 活动：" >&2
             grep "QUICX FEC: tx loss" client.log >&2
             exit 1
           fi
-          echo "干净链路零冗余确认"
+          echo "显式关闭保底冗余后的干净链路零冗余确认"
       - name: 端到端：丢包链路（lo + netem，可用时）
         continue-on-error: true
         run: |

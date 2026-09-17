@@ -6,9 +6,11 @@ sending blindly at a fixed rate the way Hysteria2's `brutal` congestion control 
 and without wasting bandwidth?
 
 The answer is **yes**. It is implemented and verified in CI over a lossy link. The core
-idea is adaptive redundancy: no parity packet at all is sent on a path that doesn't lose
-packets, and on a lossy path the amount of redundancy follows the measured loss rate,
-capped by a configurable bound.
+idea is adaptive redundancy: by default a 5% baseline keeps a little parity flowing for
+links that suddenly lose about 8% of packets and then drop back to clean; set
+`baseline_redundancy_percent` to `0` explicitly for zero parity on a clean path. On a
+lossy path the amount of redundancy follows the measured loss rate, capped by a
+configurable bound.
 
 There is one scheme: the **sliding window scheme**. Repair rows are generated
 continuously for the most recent W packets that carry application data, so a lost packet is
@@ -49,8 +51,10 @@ packets into fixed groups.
   long as the longest member of the window, mixing in small packets would only make every
   row as long as the data packets next to them;
 - one repair row is emitted per ~`1/rate` packets, where
-  `rate = min(1.5 * measured loss, what the cap allows)`. Below 0.2% loss `rate` is 0 and
-  not a single parity packet is sent;
+  `rate = min(max(baseline, 1.5 * measured loss), what the cap allows)`. The default
+  baseline is 5%, so even a clean path keeps a little parity; set it to 0 for zero
+  redundancy. Below 0.2% loss the reactive part is 0, but the configured baseline still
+  determines the rate;
 - **the measured loss rate is an accumulated sample, not a single report**: the peer
   reports its cumulative counters every 20ms, and on a slow connection one report covers
   one or two packets, so a single lost packet would read as 50%-100% loss. The sender
@@ -113,7 +117,7 @@ pay for is skipped (counted in `skipped`). Because only earned bytes can be spen
 
 The credit is capped (32 KB) so that credit earned on a long clean stretch is not dumped in
 one burst; what limits spending in normal operation is the target redundancy rate `rate`
-(about 1.5 x loss), and the credit only enforces "never more than the cap".
+(by default `max(5% baseline, 1.5 x loss)`; `1.5 x loss` when the baseline is off), and the credit only enforces "never more than the cap".
 
 ### 2.5 Capacity
 
@@ -124,16 +128,18 @@ cap, so about 28% is actually reachable):
 
 | measured loss p | target rate | covering rows | expected losses in the window | recoverable burst |
 | --- | --- | --- | --- | --- |
-| < 0.2% | 0 (idle) | 0 | - | - |
-| 1% | 1.5% | 1.9 | 1.3 | ~2 |
-| 2% | 3% | 3.8 | 2.6 | ~4 |
+| < 0.2% | 5% (default baseline; 0 disables it) | 6.4 | - | - |
+| 1% | 5% | 6.4 | 1.3 | ~6 |
+| 2% | 5% | 6.4 | 2.6 | ~6 |
 | 5% | 7.5% | 9.6 | 6.4 | ~9 |
 | 10% | 15% | 19.2 | 12.8 | ~19 |
 | 12% | 18% | 23.0 | 15.4 | ~23 |
 | 15% | 22.5% | 28.8 | 19.2 | ~29 |
 | 20% | 30% target (28% capped) | 35.8 | 25.6 | ~35, the rest may still fall back to retransmission |
 
-The default was raised from 20% to 30% because the same-packet CI comparison showed that the
+When the baseline 5% is not yet exceeded by the measured loss, the target rate is that
+baseline, so the 1% and 2% rows show 5% rather than `1.5x`. The default cap was raised from
+20% to 30% because the same-packet CI comparison showed that the
 old cap reaches only about 18% after the row header is paid, repairing only about half of
 the planned losses at 20% random loss. The 30% cap repairs about 91% of the same plan
 (median of three runs; a single run reached 100%), with the rest falling back to QUIC
@@ -179,8 +185,8 @@ burst needs have to be spent before its packets leave the window.
 | | HY2 `brutal` | QUICX FEC |
 | --- | --- | --- |
 | Mechanism | Fixed high send rate + retransmission | Proactive erasure coding + retransmission as a fallback |
-| Bandwidth cost | Bound to the configured rate, permanently | About the measured loss rate, bounded by a configured cap (zero on a clean path) |
-| Idle / clean path | Still sends at the configured rate | **Zero redundancy** |
+| Bandwidth cost | Bound to the configured rate, permanently | About the measured loss rate plus baseline, bounded by a configured cap |
+| Idle / clean path | Still sends at the configured rate | 5% baseline by default; set it to 0 for zero redundancy |
 | Congestion control | Bypassed | Fully respected, parity counts toward cwnd |
 | Recovery latency | About one round trip | As soon as a repair row arrives (peeled row by row) |
 | Bursty loss | Retransmission | About `W * rate` consecutive losses, peeled row by row |
@@ -212,10 +218,10 @@ request and FEC is only turned on once the server confirmed it.
 - `max_overhead_percent`: the byte ratio cap for the whole connection (credit based, 30 by
   default): every protected packet adds `cap * packet bytes` to the credit (capped at 32 KB
   in total), and every row subtracts its actual bytes;
-- `baseline_redundancy_percent`: the **baseline redundancy rate** (0 by default): keeps that
-  share of parity traffic flowing even on a clean path, so the first burst does not have to
-  wait for 0.5*RTT of feedback. Suited to high-RTT or low-rate paths; still bounded by
-  `max_overhead_percent`;
+- `baseline_redundancy_percent`: the **baseline redundancy rate** (5 by default): keeps that
+  share of parity traffic flowing even on a clean path, so a sudden ~8% burst does not have
+  to wait for 0.5*RTT plus sampling feedback. Set it to `0` explicitly to disable. Still
+  bounded by `max_overhead_percent`;
 - `recovered_packet_feedback`: report recovered packets back to the sender (`false` by
   default): the sender feeds the loss to its congestion controller without retransmitting,
   so FEC does not hide the congestion signal. Both ends must understand the frame;
@@ -265,7 +271,7 @@ QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 7.7% / 7.2% measu
   (`repaired`/`unrecoverable` > 0): those windows are logged at **info** level, at most
   once a minute per connection, so a lossy server doesn't flood its log. In other words,
   the default `"log": {"level": "info"}` is enough to see whether FEC is doing
-  something; use `"log": {"level": "debug"}` to also see the idle (zero redundancy)
+  something; use `"log": {"level": "debug"}` to also see the idle (zero-activity)
   windows.
 - **`tx` and `rx` are two directions measured by different endpoints - don't read them as
   one number**:
@@ -340,7 +346,8 @@ QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 7.7% / 7.2% measu
   redundancy of a burst once its hold is over instead of extending it forever; and the hold
   follows the window's span on a slow connection, bounded by its maximum;
 - end-to-end tests over real UDP with loss injection and `-race`: no parity on a clean
-  path (`ParityPacketsSent = 0`), recovery at about 12% loss, recovery of bursts of three
+  path when the baseline is explicitly 0 (`ParityPacketsSent = 0`), recovery at about 12%
+  loss, recovery of bursts of three
   consecutive packets, recovery of bursts of four consecutive packets with the configuration
   QUICX ships with (the 30% cap and the default window), non-zero recovery through the GSO
   send path, and measured overhead within the cap on both endpoints - including a loss rate
@@ -371,7 +378,8 @@ two as 50%, while the old code moved the peak's deadline on **every** report - a
 sample pinned `rate = min(1.5 * 50%, cap)` at the cap for as long as reports kept arriving.
 The exact `50.0%` plateaus in the log are the fingerprint of an EWMA converging on a constant
 input. For contrast, an earlier 45 minute client log on the same path reported 0% in 99% of
-its windows and FEC stayed idle in 247 of 270 windows, so "no parity on a clean path" did
+its windows and FEC stayed idle in 247 of 270 windows (the old default baseline was 0), so
+"no parity on a clean path" did
 work whenever the estimator was quiet.
 
 ## 8. Removal of the block scheme (history)

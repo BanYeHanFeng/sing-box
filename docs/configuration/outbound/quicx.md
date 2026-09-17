@@ -124,14 +124,12 @@ the tail.
 
 #### fec.baseline_redundancy_percent
 
-The baseline redundancy rate in percent (default `0`: a clean path sends no parity at all).
-
-A purely reactive FEC only starts protecting after the peer reports the first loss. On a
-high-RTT or low-rate path the first burst can already have left the window by then. Setting
-this to `2`-`5` keeps that share of parity traffic flowing even while the path looks clean,
-so the first loss has repair rows immediately; the price is that a clean path is no longer
-idle. The value is still bounded by `max_overhead_percent`. Prefer small values, and only
-enable it on high-RTT or low-rate paths.
+The baseline redundancy rate in percent (default `5`). It keeps a small share of parity
+flowing even while the path looks clean, for links that occasionally burst to around 8%
+loss and then drop back to clean: the first loss does not have to wait for the peer's
+report (about 0.5*RTT plus sampling delay). Set it explicitly to `0` to return to a purely
+reactive path. It is still bounded by `max_overhead_percent`; `5` is the recommended knee
+for ~8% bursts, `3` is cheaper on a clean path, and `8` protects more of the initial burst.
 
 #### fec.recovered_packet_feedback
 
