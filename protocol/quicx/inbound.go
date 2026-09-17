@@ -107,6 +107,13 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 // from "configured off", so an explicit 0 still disables the baseline.
 const defaultFECBaselineRedundancyPercent = 5
 
+// defaultFECRecoveredPacketFeedback keeps FEC from hiding loss from the congestion
+// controller: repaired packets are reported back to the sender, which feeds the loss to
+// its congestion controller without retransmitting them. Both ends of the current
+// version understand the frame; a peer that does not can be served by setting
+// fec.recovered_packet_feedback to false explicitly.
+const defaultFECRecoveredPacketFeedback = true
+
 // buildFECOptions returns the FEC options for the QUICX client and service. FEC is
 // enabled by default; it is only disabled when explicitly turned off in the
 // configuration.
@@ -116,6 +123,7 @@ func buildFECOptions(options *option.QUICXFECOptions) *quicx.FECOptions {
 	}
 	fecOptions := &quicx.FECOptions{
 		BaselineRedundancyPercent: defaultFECBaselineRedundancyPercent,
+		RecoveredPacketFeedback:   defaultFECRecoveredPacketFeedback,
 	}
 	if options != nil {
 		fecOptions.MaxOverheadPercent = options.MaxOverheadPercent
@@ -124,7 +132,9 @@ func buildFECOptions(options *option.QUICXFECOptions) *quicx.FECOptions {
 		if options.BaselineRedundancyPercent != nil {
 			fecOptions.BaselineRedundancyPercent = *options.BaselineRedundancyPercent
 		}
-		fecOptions.RecoveredPacketFeedback = options.RecoveredPacketFeedback
+		if options.RecoveredPacketFeedback != nil {
+			fecOptions.RecoveredPacketFeedback = *options.RecoveredPacketFeedback
+		}
 	}
 	return fecOptions
 }

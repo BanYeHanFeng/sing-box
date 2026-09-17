@@ -226,9 +226,10 @@ request and FEC is only turned on once the server confirmed it.
   share of parity traffic flowing even on a clean path, so a sudden ~8% burst does not have
   to wait for 0.5*RTT plus sampling feedback. Set it to `0` explicitly to disable. Still
   bounded by `max_overhead_percent`;
-- `recovered_packet_feedback`: report recovered packets back to the sender (`false` by
+- `recovered_packet_feedback`: report recovered packets back to the sender (`true` by
   default): the sender feeds the loss to its congestion controller without retransmitting,
-  so FEC does not hide the congestion signal. Both ends must understand the frame;
+  so FEC does not hide the congestion signal. Both ends must understand the frame, and an
+  older peer can be served by setting it to `false` explicitly;
 - `fec.scheme` has been removed: there is only one scheme to run, and a config that sets
   the field is rejected as an unknown field.
 

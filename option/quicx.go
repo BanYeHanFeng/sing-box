@@ -69,7 +69,8 @@ type QUICXFECOptions struct {
 	BaselineRedundancyPercent *int `json:"baseline_redundancy_percent,omitempty"`
 	// RecoveredPacketFeedback reports packets this endpoint reconstructed with FEC back
 	// to the sender, so its congestion controller sees the loss without retransmitting
-	// the packet (RFC 9265, known-lossy-path exception). Off by default; both ends have
-	// to understand the FEC_RECOVERED frame.
-	RecoveredPacketFeedback bool `json:"recovered_packet_feedback,omitempty"`
+	// the packet (RFC 9265, known-lossy-path exception). Enabled by default; both ends
+	// have to understand the FEC_RECOVERED frame, so set it to false only when
+	// the peer does not support it.
+	RecoveredPacketFeedback *bool `json:"recovered_packet_feedback,omitempty"`
 }
