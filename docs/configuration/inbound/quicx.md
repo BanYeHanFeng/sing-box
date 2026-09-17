@@ -151,6 +151,17 @@ so the first loss has repair rows immediately; the price is that a clean path is
 idle. The value is still bounded by `max_overhead_percent`. Prefer small values, and only
 enable it on high-RTT or low-rate paths.
 
+#### fec.recovered_packet_feedback
+
+Report packets this endpoint reconstructed with FEC back to the sender (`false` by default).
+
+When enabled, the receiver sends a `FEC_RECOVERED` frame after repairing packets, and the
+sender feeds the corresponding loss to its congestion controller without retransmitting
+them (they were already processed and acknowledged as received). This keeps FEC from
+hiding the congestion signal. Both ends must understand the frame, so it is off by
+default; enable it on both ends only if FEC connections should take part in congestion
+control feedback.
+
 #### tls
 
 ==Required==

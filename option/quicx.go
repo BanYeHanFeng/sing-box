@@ -64,4 +64,9 @@ type QUICXFECOptions struct {
 	// feedback. Bounded by MaxOverheadPercent. Defaults to 0 (a clean path stays idle);
 	// 2-5 is a reasonable value on high-RTT or low-rate links.
 	BaselineRedundancyPercent int `json:"baseline_redundancy_percent,omitempty"`
+	// RecoveredPacketFeedback reports packets this endpoint reconstructed with FEC back
+	// to the sender, so its congestion controller sees the loss without retransmitting
+	// the packet (RFC 9265, known-lossy-path exception). Off by default; both ends have
+	// to understand the FEC_RECOVERED frame.
+	RecoveredPacketFeedback bool `json:"recovered_packet_feedback,omitempty"`
 }

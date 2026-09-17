@@ -115,6 +115,7 @@ func buildFECOptions(options *option.QUICXFECOptions) *quicx.FECOptions {
 		fecOptions.MaxGroupSize = options.MaxGroupSize
 		fecOptions.MaxParityRows = options.MaxParityRows
 		fecOptions.BaselineRedundancyPercent = options.BaselineRedundancyPercent
+		fecOptions.RecoveredPacketFeedback = options.RecoveredPacketFeedback
 	}
 	return fecOptions
 }
