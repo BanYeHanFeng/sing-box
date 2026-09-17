@@ -59,7 +59,7 @@ jobs:
                 "listen": "127.0.0.1",
                 "listen_port": 18443,
                 "users": [{ "name": "test", "password": "test" }],
-                "fec": { "max_overhead_percent": 10, "max_group_size": 16, "max_parity_rows": 1 },
+                "fec": { "max_overhead_percent": 10, "max_group_size": 16, "max_parity_rows": 1, "baseline_redundancy_percent": 3 },
                 "tls": {
                   "enabled": true,
                   "certificate_path": "cert.pem",

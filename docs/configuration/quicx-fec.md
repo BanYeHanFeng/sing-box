@@ -209,6 +209,10 @@ request and FEC is only turned on once the server confirmed it.
 - `max_overhead_percent`: the byte ratio cap for the whole connection (credit based, 20 by
   default): every protected packet adds `cap * packet bytes` to the credit (capped at 32 KB
   in total), and every row subtracts its actual bytes;
+- `baseline_redundancy_percent`: the **baseline redundancy rate** (0 by default): keeps that
+  share of parity traffic flowing even on a clean path, so the first burst does not have to
+  wait for 0.5*RTT of feedback. Suited to high-RTT or low-rate paths; still bounded by
+  `max_overhead_percent`;
 - `fec.scheme` has been removed: there is only one scheme to run, and a config that sets
   the field is rejected as an unknown field.
 

@@ -59,4 +59,9 @@ type QUICXFECOptions struct {
 	// MaxParityRows is the number of repair rows an idle sender emits for the tail of
 	// its window, so that the packets sent last are protected too. Defaults to 2.
 	MaxParityRows int `json:"max_parity_rows,omitempty"`
+	// BaselineRedundancyPercent keeps a small fixed redundancy on the wire even while
+	// the path looks lossless, so the first burst doesn't have to wait for the peer's
+	// feedback. Bounded by MaxOverheadPercent. Defaults to 0 (a clean path stays idle);
+	// 2-5 is a reasonable value on high-RTT or low-rate links.
+	BaselineRedundancyPercent int `json:"baseline_redundancy_percent,omitempty"`
 }

@@ -140,6 +140,17 @@ packets sent last are covered by the fewest rows, and the idle tail rows are the
 them. `1` reduces the parity traffic of an idle connection, `2` repairs one more loss in
 the tail.
 
+#### fec.baseline_redundancy_percent
+
+The baseline redundancy rate in percent (default `0`: a clean path sends no parity at all).
+
+A purely reactive FEC only starts protecting after the peer reports the first loss. On a
+high-RTT or low-rate path the first burst can already have left the window by then. Setting
+this to `2`-`5` keeps that share of parity traffic flowing even while the path looks clean,
+so the first loss has repair rows immediately; the price is that a clean path is no longer
+idle. The value is still bounded by `max_overhead_percent`. Prefer small values, and only
+enable it on high-RTT or low-rate paths.
+
 #### tls
 
 ==Required==

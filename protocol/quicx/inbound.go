@@ -114,6 +114,7 @@ func buildFECOptions(options *option.QUICXFECOptions) *quicx.FECOptions {
 		fecOptions.MaxOverheadPercent = options.MaxOverheadPercent
 		fecOptions.MaxGroupSize = options.MaxGroupSize
 		fecOptions.MaxParityRows = options.MaxParityRows
+		fecOptions.BaselineRedundancyPercent = options.BaselineRedundancyPercent
 	}
 	return fecOptions
 }
