@@ -7391,6 +7391,9 @@
                 "aggressive"
               ]
             },
+            "fec": {
+              "$ref": "#/$defs/QUICXFECOptions"
+            },
             "tls": {
               "$ref": "#/$defs/InboundTLSOptions"
             },
@@ -13095,6 +13098,9 @@
                 "aggressive"
               ]
             },
+            "fec": {
+              "$ref": "#/$defs/QUICXFECOptions"
+            },
             "network": {
               "anyOf": [
                 {
@@ -16828,6 +16834,30 @@
         },
         "timeout": {
           "$ref": "#/$defs/Duration"
+        }
+      },
+      "additionalProperties": false
+    },
+    "QUICXFECOptions": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "max_overhead_percent": {
+          "type": "integer"
+        },
+        "max_group_size": {
+          "type": "integer"
+        },
+        "max_parity_rows": {
+          "type": "integer"
+        },
+        "baseline_redundancy_percent": {
+          "type": "integer"
+        },
+        "recovered_packet_feedback": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false

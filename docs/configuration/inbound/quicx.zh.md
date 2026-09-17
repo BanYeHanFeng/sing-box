@@ -20,8 +20,9 @@
   "fec": {
     "enabled": true,
     "max_overhead_percent": 30,
-    "max_group_size": 16,
-    "max_parity_rows": 1
+    "max_group_size": 128,
+    "max_parity_rows": 2,
+    "baseline_redundancy_percent": 5
   },
   "tls": {
     "enabled": true,
@@ -91,17 +92,19 @@ BBR 拥塞控制算法配置，可选 `conservative` `standard` `aggressive`。
 一条 `QUICX FEC enabled` 的 debug 日志并带上对端地址，因此客户端每次重连都会新增一对，属于正常
 现象（详见 [QUICX FEC](../quicx-fec.zh.md#5-日志与观测)）。
 
-运行期间每 10 秒会输出一条统计（窗口内无 FEC 活动时不输出），默认 debug 级别；窗口内实际修复过
-包时提升为 info 级别（每连接每分钟最多一条）：
+运行期间每 10 秒会输出一条统计（窗口内无 FEC 活动时不输出），默认 debug 级别；窗口"值得关注"
+时提升为 info 级别（每连接每分钟最多一条），例如修复过或放弃过包、收到重复校验行、或对端停发而
+仍有被保护包缺失：
 
 ```
 QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 5.1% / 4.8% measured,
-  protected 1200 pkts (1.4 MB), parity 61 pkts (76.3 KB), skipped 2 rows, dropped 0 frames;
+  protected 1200 pkts (1.4 MB), parity 61 pkts (76.3 KB), skipped 2 rows (2 budget, 0 too large),
+  dropped 0 frames, rtt 24.6ms (+3.8ms vs min);
   rx repaired 128, unrecoverable 9, parity 58 pkts, protected 1400 pkts
 ```
 
 `tx` 一列是本端**发送**方向（丢包率由对端观测后回传），`rx` 一列是本端**接收**方向；两者由不同
-端点测量，不要混着看。`skipped` 是因超出上限而**主动放弃保护**的校验行数。
+端点测量，不要混着看。`skipped` 是被**主动放弃发送**的校验行数（额度不够，或这一行构造不出来）。
 
 #### fec.enabled
 
@@ -116,14 +119,14 @@ QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 5.1% / 4.8% measu
 
 #### fec.max_group_size
 
-窗口大小（同时保护的包数），默认 `128`。
+窗口大小（同时保护的包数），默认 `128`（也是线上格式允许的最大窗口，填更大的值会被压到 `128`）。
 
 窗口内同一个包会被约 `窗口大小 × 冗余率` 行校验覆盖，所以窗口越大越能修突发丢包，
 代价是内存（约 `窗口大小 × MTU` / 方向）与校验计算量。
 
 #### fec.max_parity_rows
 
-发送端空闲时，为窗口尾部补发的校验行数（默认 `2`）。
+发送端空闲时，为窗口尾部补发的校验行数（默认 `2`；填更大的值会被压到 `2`）。
 
 一个包在窗口里停留期间被多少行覆盖取决于冗余率，而最后发出的几个包覆盖行数最少，
 空闲补尾就是为它们准备的；设为 `1` 可以减少空闲时的校验流量，`2` 能多修一个尾部丢包。

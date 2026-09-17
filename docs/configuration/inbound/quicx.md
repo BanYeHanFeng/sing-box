@@ -21,7 +21,8 @@
     "enabled": true,
     "max_overhead_percent": 30,
     "max_group_size": 128,
-    "max_parity_rows": 2
+    "max_parity_rows": 2,
+    "baseline_redundancy_percent": 5
   },
   "tls": {
     "enabled": true,
@@ -98,18 +99,22 @@ expected (see [QUICX FEC](../quicx-fec.md#5-logging)).
 
 While FEC is enabled, a statistics line is written every 10 seconds (windows without FEC
 activity are skipped). It is written at debug level, and promoted to info level - at
-most once a minute per connection - when packets were actually repaired:
+most once a minute per connection - when the window is notable (packets were repaired or
+given up on, a duplicate repair row arrived, or the sender went idle with protected
+packets still missing):
 
 ```
 QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 5.1% / 4.8% measured,
-  protected 1200 pkts (1.4 MB), parity 61 pkts (76.3 KB), skipped 2 rows, dropped 0 frames;
+  protected 1200 pkts (1.4 MB), parity 61 pkts (76.3 KB), skipped 2 rows (2 budget, 0 too large),
+  dropped 0 frames, rtt 24.6ms (+3.8ms vs min);
   rx repaired 128, unrecoverable 9, parity 58 pkts, protected 1400 pkts
 ```
 
 The `tx` column is the direction this endpoint **sends** on (the loss rate is measured by
 the peer and reported back); the `rx` column is the direction it **receives** on. They are
 measured by different endpoints, so don't read them as one number. `skipped` counts the
-repair rows that were deliberately left unsent to stay within the cap.
+repair rows that were deliberately left unsent (the cap's byte credit didn't cover them,
+or the row could not be built).
 
 #### fec.enabled
 
@@ -126,14 +131,16 @@ line) instead of exceeding the bound.
 
 #### fec.max_group_size
 
-The window size, `64` by default. Every packet stays in the window for that many packets
+The window size, `128` by default (the largest window the wire format carries; a larger
+value is clamped to `128`). Every packet stays in the window for that many packets
 and is covered by about `window * redundancy` rows, so a larger window recovers longer
 bursts - at the cost of memory (roughly two windows of MTU sized packets per direction)
 and parity computation.
 
 #### fec.max_parity_rows
 
-The number of repair rows an idle sender emits for the tail of its window (`2` by default).
+The number of repair rows an idle sender emits for the tail of its window (`2` by default;
+a larger value is clamped to `2`).
 
 How many rows cover a packet while it stays in the window depends on the redundancy; the
 packets sent last are covered by the fewest rows, and the idle tail rows are there for

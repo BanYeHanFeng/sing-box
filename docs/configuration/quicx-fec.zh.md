@@ -57,7 +57,7 @@ FEC_WINDOW_REPAIR (0x34)：
 ```
 
 - **成员用位图**而不是包号列表：窗口内包号近似连续（校验包自己占掉的包号位为 0），
-  所以一位一个包号；`window=64` 时位图约 9~10 字节；
+  所以一位一个包号；默认 `window=128` 时位图约 17~21 字节（校验包占用的包号本身也计入跨度）；
 - **长度不逐个发**：把各成员长度按同一组系数做 GF(2^8) 线性组合，只发 2 字节。
   解码端解出包的同时就解出了它的长度（长度是 16 位，高低字节各按同一方程组合）；
 - **系数是 GF(2^8) 上的 Cauchy 矩阵**：`c(行, 位置) = 1 / (x行 + y位置)`，行基 `x` 取
@@ -79,7 +79,7 @@ FEC_WINDOW_REPAIR (0x34)：
 行的实际字节。发不出的行就跳过（计入 `skipped`）。因为额度只会被"自己挣来的"字节花掉，所以
 
 > `校验字节 ÷ 被保护字节 ≤ max_overhead_percent` 在**整条连接上恒成立**，
-> 统计行里的 `measured` 可以直接拿来核对上限。
+> 所以要核对上限，应当累计整段日志里的 `measured`，而不是看单个 10 秒窗口。
 
 额度有上限（32 KB），避免长时间干净链路攒下的额度在丢包突发时一次性倾泻；正常状态下限制
 短期花费的是目标冗余率 `rate`（默认 `max(5% 保底, 1.5 × 丢包率)`；关闭保底时为 `1.5 × 丢包率`），额度只负责"不许超"。
@@ -150,10 +150,24 @@ FEC_WINDOW_REPAIR (0x34)：
 FEC 只在两端都开启时才生效（客户端声明、服务端确认）。字段说明见
 [出站](outbound/quicx.zh.md#fec)与[入站](inbound/quicx.zh.md#fec)文档。
 
-- `max_group_size`：窗口大小（默认 `128`）；
+```json
+{
+  "type": "quicx",
+  "fec": {
+    "enabled": true,
+    "max_overhead_percent": 30,
+    "max_group_size": 128,
+    "max_parity_rows": 2,
+    "baseline_redundancy_percent": 5
+  }
+}
+```
+
+- `max_overhead_percent`：**整条连接的字节比例上限**（额度制，默认 `30`，超过 `100` 会被压到
+  `100`）：每进一个被保护包增加 `上限 × 包字节` 的额度（总额度封顶 32 KB），每发一行扣掉该行的
+  实际字节；
+- `max_group_size`：窗口大小（默认 `128`，也是线上格式允许的最大窗口；填更大的值会被压到 `128`）；
 - `max_parity_rows`：空闲补尾行数（默认 `2`，上限 2）；
-- `max_overhead_percent`：**整条连接的字节比例上限**（额度制，默认 `30`）：每进一个被保护包
-  增加 `上限 × 包字节` 的额度（总额度封顶 32 KB），每发一行扣掉该行的实际字节；
 - `baseline_redundancy_percent`：**保底冗余率**（默认 `5`）：干净链路上也保持该比例的校验流量，
   让 8% 左右的突然丢包不必等 0.5×RTT + 采样时间的反馈；显式设为 `0` 可关闭。仍受
   `max_overhead_percent` 约束；
@@ -166,9 +180,13 @@ FEC 只在两端都开启时才生效（客户端声明、服务端确认）。�
 协商完成后两端各输出一条 debug 日志，带对端地址：
 
 ```
-QUICX FEC enabled (server, 203.0.113.9:41234, sliding window scheme, max overhead 30%, window 128, tail rows 2)
-QUICX FEC enabled (client, 198.51.100.7:30010, sliding window scheme, max overhead 30%, window 128, tail rows 2)
+QUICX FEC enabled (server, 203.0.113.9:41234, sliding window scheme, max overhead 30%, baseline 5%, window 128, tail rows 2)
+QUICX FEC enabled (client, 198.51.100.7:30010, sliding window scheme, max overhead 30%, baseline 5%, window 128, tail rows 2)
 ```
+
+只有**真正配置过**的限制才会追加到这一行上：5% 保底冗余是 sing-box 的默认值，所以除非显式设为
+`0`，它总会出现；而上限、窗口大小、补尾行数未配置时用 quic-go 的默认值（30%、128、2），不会打印。
+全部走默认的连接输出的是 `sliding window scheme, baseline 5%)`。
 
 **每个 QUIC 连接一条，不是每个客户端或每个进程一条**。FEC 是连接级协商（客户端在鉴权请求里
 声明支持，服务端确认后把该连接置为 FEC 模式），新连接必然要重新协商一次，所以客户端每重连一次
@@ -184,14 +202,16 @@ QUICX FEC enabled (client, 198.51.100.7:30010, sliding window scheme, max overhe
 运行期间每 10 秒输出一条统计（窗口内没有任何 FEC 活动时不输出）：
 
 ```
-QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 7.7% / 7.2% measured,
-  protected 1200 pkts (1.4 MB), parity 96 pkts (118.2 KB), skipped 2 rows, dropped 0 frames;
+QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 5.1% / 4.8% measured,
+  protected 1200 pkts (1.4 MB), parity 96 pkts (112.5 KB), skipped 2 rows (2 budget, 0 too large),
+  dropped 0 frames, rtt 24.6ms (+3.8ms vs min);
   rx repaired 128, unrecoverable 9, parity 91 pkts, protected 1400 pkts
 ```
 
-- 该统计默认是 **debug** 级别；若窗口内确实修复过包（`repaired`/`unrecoverable` > 0），
-  会提升为 **info** 级别，但**每个连接每分钟最多一条**，避免丢包链路上的服务器被刷屏。
-  也就是说：只想看"FEC 是否在生效"，保持默认 `"log": {"level": "info"}` 即可；
+- 该统计默认是 **debug** 级别；窗口"值得关注"时提升为 **info** 级别：修复过或放弃过包
+  （`repaired`/`unrecoverable` > 0）、收到重复校验行、还有被保护包缺失且窗口内没有校验行到达
+  （对端停发）、或发生过 recovered 回报。但**每个连接每分钟最多一条**，避免丢包链路上的服务器被
+  刷屏。也就是说：只想看"FEC 是否在生效"，保持默认 `"log": {"level": "info"}` 即可；
   想看到包括零活动窗口在内的完整轨迹，用 `"log": {"level": "debug"}` 一直开着。
 - **`tx` 与 `rx` 是两个方向，由不同端点测量，不要混着看**：
   - `tx loss`：**本端发送**方向的链路丢包率，由**对端**按包号空洞测出后回传（包含已被 FEC
@@ -203,12 +223,24 @@ QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 7.7% / 7.2% measu
   - `rx repaired` / `rx unrecoverable`：**本端接收**方向由校验包恢复 / 修不回来的包数
     （`unrecoverable` 只统计"校验也修不回来、只能交给 QUIC 重传"的包）；
   - `rx parity` / `rx protected`：接收方向看到的校验包数与被保护包数。
-- `rate ... / ... measured`：前者是发送端当前的目标冗余率（≈ `1.5 × 实测丢包率`，再被上限压低），
+  - `window 128 pkts`（或 `idle`）：输出时刻的状态；`idle` 表示当前链路看起来无丢包、发送端没有在
+    花校验流量，但它旁边的计数器仍可能是本窗口早先累积的值；
+  - `rtt 24.6ms (+3.8ms vs min)`：平滑 RTT 以及相对连接最小 RTT 的排队时延。修复期间如果它随冗余率
+    一起增长，说明更像拥塞而不是链路固有丢包，应当降低冗余而不是继续加；
+  - `still missing N pkts`：对端声明保护、而本端既没收到也没修回的包数（仪表值）；校验行停止到达时
+    它不为 0，就是"对端停发、接收端仍有空洞"的特征；
+  - `duplicate N rows`：因同一行号的方程已在等待而被丢弃的校验行（重复行不能增加秩，只会增加计算量）；
+  - `recovered losses N` / `recovered reported N`：仅在开启 `recovered_packet_feedback` 时出现：
+    对端回报已修回的包（喂给本端拥塞控制但不重传）与本端修回并回报给对端的包。
+- `rate ... / ... measured`：前者是发送端当前的目标冗余率
+  （`max(保底冗余率, 1.5 × 实测丢包率)`，再被上限压低），
   后者是**本窗口**的 `校验字节 ÷ 被保护字节`。**上限约束的是整条连接的累计比例**（额度制），
   单个 10 秒窗口的比值可以超过上限（窗口里包很少、或恰好补了尾行时，日志里能看到
   `244.2% measured` 这种数字）——要核对上限请自己按整段日志累计，别用单窗口的 `measured`。
-- `skipped N rows`：本窗口因额度不够而主动放弃发送的校验行数。它不为 0 说明上限正在生效；
-  如果长期很大，说明包太小或流量太稀，可以考虑放宽 `max_overhead_percent`。
+- `skipped N rows (N budget, N too large)`：本窗口主动放弃发送的校验行数；括号里的原因拆分在不
+  为 0 时输出：`budget` 是额度不够（说明限制 FEC 的是上限而不是丢包估计，可以考虑放宽
+  `max_overhead_percent`）；`too large` 是这一行根本构造不出来（窗口跨度无法描述，或一行装不进
+  一个数据报——包太小、流量太稀或窗口太大）。
 - `dropped N frames`：本窗口因发送队列长期占满、来不及发出而被丢弃的校验帧数。
   正常应为 0；持续增长说明这一侧实际上没在保护（饱和上传/下载时会这样），
   需要确认链路是否已跑满或考虑降低 FEC 窗口大小。

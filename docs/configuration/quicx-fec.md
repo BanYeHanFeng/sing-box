@@ -76,8 +76,9 @@ FEC_WINDOW_REPAIR (0x34):
 
 - a row carries a **bitmap** of member packet numbers instead of a packet number list:
   packet numbers inside a window are nearly consecutive (the numbers spent on parity
-  packets simply stay clear), so one bit per packet number - about 9-10 bytes at
-  `window=64`;
+  packets simply stay clear), so one bit per packet number - about 17-21 bytes at the
+  default `window=128`, because the packet numbers the parity packets spend are part of
+  the span the bitmap describes;
 - **lengths are not listed per member**: the members' wire lengths are combined with the
   same coefficients over GF(2^8) and only two bytes are sent. The length is 16 bit and its
   two bytes are solved by the same equations as the packet, so recovering a packet recovers
@@ -112,8 +113,8 @@ to the credit, and sending a row subtracts that row's actual bytes. A row the cr
 pay for is skipped (counted in `skipped`). Because only earned bytes can be spent,
 
 > `parity bytes / protected bytes <= max_overhead_percent` holds **over the whole
-> connection**, and the `measured` value in the statistics line can be checked against the
-> cap directly.
+> connection**, so the `measured` values accumulated over a whole log - not a single
+> 10 second window - are what the cap can be checked against.
 
 The credit is capped (32 KB) so that credit earned on a long clean stretch is not dumped in
 one burst; what limits spending in normal operation is the target redundancy rate `rate`
@@ -207,17 +208,20 @@ request and FEC is only turned on once the server confirmed it.
     "enabled": true,
     "max_overhead_percent": 30,
     "max_group_size": 128,
-    "max_parity_rows": 2
+    "max_parity_rows": 2,
+    "baseline_redundancy_percent": 5
   }
 }
 ```
 
-- `max_group_size`: the window size (128 by default);
+- `max_overhead_percent`: the byte ratio cap for the whole connection (credit based, 30 by
+  default; a larger value is clamped to 100): every protected packet adds `cap * packet
+  bytes` to the credit (capped at 32 KB in total), and every row subtracts its actual
+  bytes;
+- `max_group_size`: the window size (128 by default, the largest window the wire format
+  carries; a larger value is clamped to 128);
 - `max_parity_rows`: the number of repair rows an idle sender emits for the tail of its
   window (2 by default, at most 2);
-- `max_overhead_percent`: the byte ratio cap for the whole connection (credit based, 30 by
-  default): every protected packet adds `cap * packet bytes` to the credit (capped at 32 KB
-  in total), and every row subtracts its actual bytes;
 - `baseline_redundancy_percent`: the **baseline redundancy rate** (5 by default): keeps that
   share of parity traffic flowing even on a clean path, so a sudden ~8% burst does not have
   to wait for 0.5*RTT plus sampling feedback. Set it to `0` explicitly to disable. Still
@@ -236,9 +240,15 @@ the individual fields.
 Both sides log a debug line once FEC is negotiated, including the peer address:
 
 ```
-QUICX FEC enabled (server, 203.0.113.9:41234, sliding window scheme, max overhead 30%, window 128, tail rows 2)
-QUICX FEC enabled (client, 198.51.100.7:30010, sliding window scheme, max overhead 30%, window 128, tail rows 2)
+QUICX FEC enabled (server, 203.0.113.9:41234, sliding window scheme, max overhead 30%, baseline 5%, window 128, tail rows 2)
+QUICX FEC enabled (client, 198.51.100.7:30010, sliding window scheme, max overhead 30%, baseline 5%, window 128, tail rows 2)
 ```
+
+Only the limits that are actually configured are appended to the line: the 5% baseline is a
+sing-box default, so it appears unless it was explicitly set to `0`, while the overhead cap,
+the window size and the tail rows fall back to the quic-go defaults (30%, 128, 2) and are
+printed only when the configuration sets them. A connection running entirely on the defaults
+logs `sliding window scheme, baseline 5%)`.
 
 **One line per QUIC connection, not per client or per process.** FEC is negotiated per
 connection (the client announces support in its authentication request and the server
@@ -262,17 +272,19 @@ While FEC is enabled, a statistics line is written every 10 seconds (windows wit
 any FEC activity are skipped):
 
 ```
-QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 7.7% / 7.2% measured,
-  protected 1200 pkts (1.4 MB), parity 96 pkts (118.2 KB), skipped 2 rows, dropped 0 frames;
+QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 5.1% / 4.8% measured,
+  protected 1200 pkts (1.4 MB), parity 96 pkts (112.5 KB), skipped 2 rows (2 budget, 0 too large),
+  dropped 0 frames, rtt 24.6ms (+3.8ms vs min);
   rx repaired 128, unrecoverable 9, parity 91 pkts, protected 1400 pkts
 ```
 
-- The line is written at **debug** level, except when packets were actually repaired
-  (`repaired`/`unrecoverable` > 0): those windows are logged at **info** level, at most
-  once a minute per connection, so a lossy server doesn't flood its log. In other words,
-  the default `"log": {"level": "info"}` is enough to see whether FEC is doing
-  something; use `"log": {"level": "debug"}` to also see the idle (zero-activity)
-  windows.
+- The line is written at **debug** level, except when the window is notable: packets were
+  repaired or given up on (`repaired`/`unrecoverable` > 0), a duplicate repair row arrived,
+  protected packets are still missing while no repair row arrived (the sender went idle), or
+  a recovered packet was reported. Those windows are logged at **info** level, at most once a
+  minute per connection, so a lossy server doesn't flood its log. In other words, the default
+  `"log": {"level": "info"}` is enough to see whether FEC is doing something; use
+  `"log": {"level": "debug"}` to also see the idle (zero-activity) windows.
 - **`tx` and `rx` are two directions measured by different endpoints - don't read them as
   one number**:
   - `tx loss` is the loss rate of the direction this endpoint **sends** on, measured by the
@@ -287,17 +299,34 @@ QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 7.7% / 7.2% measu
   - `rx repaired`/`rx unrecoverable` are what this endpoint's decoder saw on the direction
     it **receives** on (`unrecoverable` counts only packets parity couldn't repair, which
     fall back to QUIC retransmission); `rx parity`/`rx protected` are the received parity
-    packet and protected packet counts.
+    packet and protected packet counts;
+  - `window 128 pkts`, or `idle` while the path looks lossless and the sender is not
+    spending parity: the state is a snapshot at the tick, so the counters next to it can
+    still be non-zero from earlier in the window;
+  - `rtt 24.6ms (+3.8ms vs min)`: the smoothed RTT and the queueing delay above the
+    connection minimum. While packets are being recovered, an inflation that grows with the
+    redundancy is evidence of congestion rather than of an intrinsically lossy path, and the
+    redundancy should be reduced instead of raised;
+  - `still missing N pkts`: gauge of protected packets the peer announced that this endpoint
+    has neither received nor reconstructed; non-zero while no parity arrived is the "sender
+    went idle while the receiver still has gaps" signature;
+  - `duplicate N rows`: repair rows dropped because an equation with the same row number was
+    already pending (they can't add rank, only work);
+  - `recovered losses N` / `recovered reported N`: only with `recovered_packet_feedback`:
+    packets the peer reported as reconstructed (fed to this endpoint's congestion controller
+    without a retransmission) and packets this endpoint reconstructed and reported back.
 - `rate ... / ... measured`: the first value is the sender's current target redundancy
-  rate (about `1.5 * measured loss`, lowered by the cap), the second is
+  rate (`max(baseline, 1.5 * measured loss)`, lowered by the cap), the second is
   `parity bytes / protected bytes` **of this window**. The cap applies to the ratio
   accumulated over the whole connection (the byte credit), so a single 10 second window can
   exceed it - small windows that pay for a tail row show values like `244.2% measured`. To
   check the cap, accumulate a whole log rather than trusting one window.
-- `skipped N rows`: repair rows this window that were deliberately not sent because the
-  byte credit couldn't pay for them. A non-zero value means the cap is doing its job; a
-  persistently large one means the packets or the flow are too small - consider raising
-  `max_overhead_percent`.
+- `skipped N rows (N budget, N too large)`: repair rows this window that were deliberately
+  not sent. The breakdown is printed when it is non-zero: `budget` rows were refused because
+  the byte credit couldn't pay for them (the cap is what limits FEC - consider raising
+  `max_overhead_percent`); `too large` rows could not be built at all (the window couldn't be
+  described, or the row didn't fit into a datagram - the packets or the flow are too small,
+  or the window is too large).
 - `dropped N frames`: parity frames discarded this window because the send queue stayed
   busy for too long. It should be zero; a growing value means FEC is not actually
   protecting anything on that side (a saturated upload or download), so check whether the
