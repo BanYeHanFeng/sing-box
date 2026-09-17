@@ -19,7 +19,7 @@
   "bbr_profile": "",
   "fec": {
     "enabled": true,
-    "max_overhead_percent": 20,
+    "max_overhead_percent": 30,
     "max_group_size": 128,
     "max_parity_rows": 2
   },
@@ -120,7 +120,7 @@ endpoint.
 
 Upper bound of the parity traffic, as a percentage of the protected traffic.
 
-`20` is used by default. The bound applies to the parity **bytes actually sent**: when the
+`30` is used by default. The bound applies to the parity **bytes actually sent**: when the
 byte budget doesn't cover a repair row, FEC skips that row (see `skipped` in the statistics
 line) instead of exceeding the bound.
 

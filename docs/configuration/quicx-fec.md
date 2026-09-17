@@ -119,8 +119,8 @@ one burst; what limits spending in normal operation is the target redundancy rat
 
 A packet stays in the window for W packets, during which about `W * rate` rows cover it, so
 the recoverable burst length is about `W * rate` (with `rate` already capped). With the
-default `W = 128`, 1200 byte packets and a 20% cap (which caps the rate at about 18%, since
-the row header is paid out of the same cap):
+default `W = 128`, 1200 byte packets and a 30% cap (the row header counts against the same
+cap, so about 28% is actually reachable):
 
 | measured loss p | target rate | covering rows | expected losses in the window | recoverable burst |
 | --- | --- | --- | --- | --- |
@@ -129,13 +129,16 @@ the row header is paid out of the same cap):
 | 2% | 3% | 3.8 | 2.6 | ~4 |
 | 5% | 7.5% | 9.6 | 6.4 | ~9 |
 | 10% | 15% | 19.2 | 12.8 | ~19 |
-| 12% | 18% (capped) | 23.0 | 15.4 | ~23 |
-| 20% | 18% (capped) | 23.0 | 25.6 | ~23, the rest falls back to retransmission |
+| 12% | 18% | 23.0 | 15.4 | ~23 |
+| 15% | 22.5% | 28.8 | 19.2 | ~29 |
+| 20% | 30% target (28% capped) | 35.8 | 25.6 | ~35, the rest may still fall back to retransmission |
 
-The information theoretic limit still applies: a cap of about 18% cannot repair 20% random
-loss, and a burst longer than about 23 consecutive packets is not repaired either. The extra
-rows are still not wasted when a burst is too long: they repair the packets they can, and the
-rest falls back to retransmission.
+The default was raised from 20% to 30% because the same-packet CI comparison showed that the
+old cap reaches only about 18% after the row header is paid, repairing only about half of
+the planned losses at 20% random loss. The 30% cap repairs about 91% of the same plan
+(median of three runs; a single run reached 100%), with the rest falling back to QUIC
+retransmission, at the cost of lower goodput under heavy loss. Paths below about 13%
+measured loss are unaffected: their `1.5x` reactive rate is below the old cap already.
 
 Two details decide whether that capacity is actually used on a bursty path. The redundancy
 is derived from the **peak loss rate measured by a sample that is large enough**, not from
@@ -196,7 +199,7 @@ request and FEC is only turned on once the server confirmed it.
   "type": "quicx",
   "fec": {
     "enabled": true,
-    "max_overhead_percent": 20,
+    "max_overhead_percent": 30,
     "max_group_size": 128,
     "max_parity_rows": 2
   }
@@ -206,7 +209,7 @@ request and FEC is only turned on once the server confirmed it.
 - `max_group_size`: the window size (128 by default);
 - `max_parity_rows`: the number of repair rows an idle sender emits for the tail of its
   window (2 by default, at most 2);
-- `max_overhead_percent`: the byte ratio cap for the whole connection (credit based, 20 by
+- `max_overhead_percent`: the byte ratio cap for the whole connection (credit based, 30 by
   default): every protected packet adds `cap * packet bytes` to the credit (capped at 32 KB
   in total), and every row subtracts its actual bytes;
 - `baseline_redundancy_percent`: the **baseline redundancy rate** (0 by default): keeps that
@@ -227,8 +230,8 @@ the individual fields.
 Both sides log a debug line once FEC is negotiated, including the peer address:
 
 ```
-QUICX FEC enabled (server, 203.0.113.9:41234, sliding window scheme, max overhead 20%, window 128, tail rows 2)
-QUICX FEC enabled (client, 198.51.100.7:30010, sliding window scheme, max overhead 20%, window 128, tail rows 2)
+QUICX FEC enabled (server, 203.0.113.9:41234, sliding window scheme, max overhead 30%, window 128, tail rows 2)
+QUICX FEC enabled (client, 198.51.100.7:30010, sliding window scheme, max overhead 30%, window 128, tail rows 2)
 ```
 
 **One line per QUIC connection, not per client or per process.** FEC is negotiated per
@@ -339,7 +342,7 @@ QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 7.7% / 7.2% measu
 - end-to-end tests over real UDP with loss injection and `-race`: no parity on a clean
   path (`ParityPacketsSent = 0`), recovery at about 12% loss, recovery of bursts of three
   consecutive packets, recovery of bursts of four consecutive packets with the configuration
-  QUICX ships with (the 20% cap and the default window), non-zero recovery through the GSO
+  QUICX ships with (the 30% cap and the default window), non-zero recovery through the GSO
   send path, and measured overhead within the cap on both endpoints - including a loss rate
   above what the cap can repair, where the transfer still completes on retransmission and
   parity stays within the cap.
