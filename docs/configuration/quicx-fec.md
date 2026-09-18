@@ -63,6 +63,12 @@ packets into fixed groups.
   measurement, and only an accepted sample changes the redundancy;
 - an idle sender (2ms, `flush_delay`) emits one or two rows for the tail of its window, so
   the last packets of a burst aren't left with very few covering rows;
+- **a loss report immediately schedules a repair burst**: the sender turns the newly
+  reported lost packets into extra repair rows for the current window (two rows per lost
+  packet, bounded by the 127 independent row bases and by the byte credit). These rows do
+  not wait for future data packets to earn row credit; they spend the credit accumulated
+  while the path looked cleaner. A burst at the end of a traffic burst therefore stays
+  repairable even after the window has stopped sliding;
 - **every row protects the whole current window**, so a packet is covered by all the rows
   that follow it: a loss is not "one group's problem" but has a chance to be repaired by
   the next `W / step` rows.
@@ -84,10 +90,11 @@ FEC_WINDOW_REPAIR (0x34):
   two bytes are solved by the same equations as the packet, so recovering a packet recovers
   its length at the same time;
 - the coefficients form a **Cauchy matrix** over GF(2^8): `c(row, position) = 1 / (x_row +
-  y_position)`, with row basis `x = α^0..α^63` and position basis `y = α^64..α^191`
-  (disjoint, so no denominator is zero). Every square submatrix of a Cauchy matrix is
-  invertible, so any n rows reconstruct any n members of the window for **any** loss
-  pattern.
+  y_position)`, with 127 row bases `x = α^0..α^126` and 128 position bases
+  `y = α^127..α^254` (the two sets cover all 255 non-zero elements, so no denominator is
+  zero). Every square submatrix of a Cauchy matrix is invertible, so any n rows reconstruct
+  any n members of one window for **any** loss pattern; a repair burst may use all 127
+  independent row bases.
 
 ### 2.3 Receiver: incremental elimination and peeling
 
@@ -103,6 +110,14 @@ FEC_WINDOW_REPAIR (0x34):
 - **late packets are substituted as well**: a packet that arrives late can turn an
   underdetermined equation into a solvable one immediately, without waiting for the next
   row;
+- **feedback uses deduplicated cumulative loss evidence**: the decoder counts packet
+  number gaps and also increments the same cumulative counter as soon as a repair row
+  reveals a protected packet to be missing (`countLoss`; a packet number is counted once).
+  A loss at the tail of a traffic burst is therefore reported and can schedule a repair
+  burst even when no later packet number ever arrives to advance the gap watermark. The
+  cumulative counter never decreases, so one lost feedback packet cannot move it backwards;
+- the decoder keeps up to 127 pending equations, one per row base, so a burst covering the
+  whole window is no longer silently cut off by the old 16 equation limit;
 - packets that are still missing after one second are counted as `unrecoverable`
   (`FailedPackets`) and fall back to QUIC retransmission.
 
@@ -116,14 +131,19 @@ pay for is skipped (counted in `skipped`). Because only earned bytes can be spen
 > connection**, so the `measured` values accumulated over a whole log - not a single
 > 10 second window - are what the cap can be checked against.
 
-The credit is capped (32 KB) so that credit earned on a long clean stretch is not dumped in
-one burst; what limits spending in normal operation is the target redundancy rate `rate`
-(by default `max(5% baseline, 1.5 x loss)`; `1.5 x loss` when the baseline is off), and the credit only enforces "never more than the cap".
+The credit is capped (256 KB) so that credit earned on a long clean stretch is not dumped in
+one abnormal burst; what limits spending in normal operation is the target redundancy rate
+`rate` (by default `max(5% baseline, 1.5 x loss)`; `1.5 x loss` when the baseline is off).
+A repair burst only spends credit that has already been earned: if the credit cannot pay
+for a row, that row is skipped, so the long-term byte ratio still satisfies the cap. A
+single burst may add at most 127 rows and sends two rows per reported lost packet, because
+the repair rows themselves are subject to the same lossy path.
 
 ### 2.5 Capacity
 
 A packet stays in the window for W packets, during which about `W * rate` rows cover it, so
-the recoverable burst length is about `W * rate` (with `rate` already capped). With the
+the **steady** recoverable burst length is about `W * rate` (with `rate` already capped); a
+loss report can add up to 127 repair-burst rows on top (see below). With the
 default `W = 128`, 1200 byte packets and a 30% cap (the row header counts against the same
 cap, so about 28% is actually reachable):
 
@@ -137,6 +157,15 @@ cap, so about 28% is actually reachable):
 | 12% | 18% | 23.0 | 15.4 | ~23 |
 | 15% | 22.5% | 28.8 | 19.2 | ~29 |
 | 20% | 30% target (28% capped) | 35.8 | 25.6 | ~35, the rest may still fall back to retransmission |
+
+The table above is the capability of the **steady rate**; the implementation adds a
+**loss-report-triggered repair burst** on top: each newly confirmed lost packet becomes two
+extra rows, up to 127 rows, paid from the credit accumulated during cleaner periods. A path
+with 3% average loss made of 60 packet bursts every 2000 packets can therefore repair most
+of each burst while it is still inside the window, even though its steady rate is only 5%.
+Only an exhausted byte credit, a burst longer than the 127 independent rows can express, or
+feedback arriving after the lost packets have left the window falls back to QUIC
+retransmission.
 
 When the baseline 5% is not yet exceeded by the measured loss, the target rate is that
 baseline, so the 1% and 2% rows show 5% rather than `1.5x`. The default cap was raised from
@@ -190,7 +219,7 @@ burst needs have to be spent before its packets leave the window.
 | Idle / clean path | Still sends at the configured rate | 5% baseline by default; set it to 0 for zero redundancy |
 | Congestion control | Bypassed | Fully respected, parity counts toward cwnd |
 | Recovery latency | About one round trip | As soon as a repair row arrives (peeled row by row) |
-| Bursty loss | Retransmission | About `W * rate` consecutive losses, peeled row by row |
+| Bursty loss | Retransmission | About `W * rate` steady coverage, plus up to 127 repair-burst rows per report |
 | Traffic signature | Constant high rate, easy to spot | Same shape as regular QUIC traffic, plus a few small packets |
 | Fit | Lossy, long haul paths | The same, but when not burning bandwidth or attracting QoS matters |
 
@@ -216,7 +245,7 @@ request and FEC is only turned on once the server confirmed it.
 
 - `max_overhead_percent`: the byte ratio cap for the whole connection (credit based, 30 by
   default; a larger value is clamped to 100): every protected packet adds `cap * packet
-  bytes` to the credit (capped at 32 KB in total), and every row subtracts its actual
+  bytes` to the credit (capped at 256 KB in total), and every row subtracts its actual
   bytes;
 - `max_group_size`: the window size (128 by default, the largest window the wire format
   carries; a larger value is clamped to 128);
@@ -275,28 +304,32 @@ any FEC activity are skipped):
 ```
 QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 5.1% / 4.8% measured,
   protected 1200 pkts (1.4 MB), parity 96 pkts (112.5 KB), skipped 2 rows (2 budget, 0 too large),
-  dropped 0 frames, rtt 24.6ms (+3.8ms vs min);
+  dropped 0 frames, rtt 24.6ms (+3.8ms vs min), burst 39 rows (7 skipped);
   rx repaired 128, unrecoverable 9, parity 91 pkts, protected 1400 pkts
 ```
 
 - The line is written at **debug** level, except when the window is notable: packets were
   repaired or given up on (`repaired`/`unrecoverable` > 0), a duplicate repair row arrived,
-  protected packets are still missing while no repair row arrived (the sender went idle), or
-  a recovered packet was reported. Those windows are logged at **info** level, at most once a
+  protected packets are still missing while no repair row arrived (the sender went idle), a
+  recovered packet was reported, or a repair burst was sent. Those windows are logged at
+  **info** level, at most once a
   minute per connection, so a lossy server doesn't flood its log. In other words, the default
   `"log": {"level": "info"}` is enough to see whether FEC is doing something; use
   `"log": {"level": "debug"}` to also see the idle (zero-activity) windows.
 - **`tx` and `rx` are two directions measured by different endpoints - don't read them as
   one number**:
   - `tx loss` is the loss rate of the direction this endpoint **sends** on, measured by the
-    **peer** from packet number gaps (including packets FEC repaired, i.e. the real path
-    quality). It is the smoothed value of samples that were large enough to measure the
+    **peer** from packet number gaps and from missing packets revealed by repair rows,
+    deduplicated into one cumulative counter (including packets FEC repaired, i.e. the real
+    path quality; a tail loss is reported through the repair-row evidence even though no
+    later packet number arrives to advance the gap watermark). It is the smoothed value of
+    samples that were large enough to measure the
     path: the peer reports every 20ms and the sender accumulates the reports until the
     sample covers `16 packets` (or holds `8 lost packets`, or has been pending for `500ms`
     with at least `8 packets`), so on a slow
     connection the number is a real ratio over a second or so instead of the ratio of one
-    20ms report. The `protected`/`parity`/`rate`/`skipped` fields next to it describe this
-    endpoint's sending side;
+    20ms report. The `protected`/`parity`/`rate`/`skipped`/`burst` fields next to it
+    describe this endpoint's sending side;
   - `rx repaired`/`rx unrecoverable` are what this endpoint's decoder saw on the direction
     it **receives** on (`unrecoverable` counts only packets parity couldn't repair, which
     fall back to QUIC retransmission); `rx parity`/`rx protected` are the received parity
@@ -311,6 +344,10 @@ QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 5.1% / 4.8% measu
   - `still missing N pkts`: gauge of protected packets the peer announced that this endpoint
     has neither received nor reconstructed; non-zero while no parity arrived is the "sender
     went idle while the receiver still has gaps" signature;
+  - `burst N rows (M skipped)`: repair-burst rows sent this window after a loss report, and
+    how many scheduled burst rows were skipped because the byte credit was exhausted or the
+    lost packets had already left the window. The parenthesized `skipped` belongs to the
+    burst only; it is separate from `skipped N rows` above;
   - `duplicate N rows`: repair rows dropped because an equation with the same row number was
     already pending (they can't add rank, only work);
   - `recovered losses N` / `recovered reported N`: only with `recovered_packet_feedback`:
@@ -342,11 +379,12 @@ QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 5.1% / 4.8% measu
   value, and it would only make every row as long as the data packets next to them);
 - parity packets are lost as well (at loss rate p, redundancy is effective about `1 - p` of
   the time), so FEC improves the delivery probability, it doesn't guarantee it;
-- how many rows cover a packet is decided by the redundancy rate (about
-  `window * rate` rows, minus the rows that are lost themselves); when the measured loss
-  rate approaches the redundancy the cap allows, there are not enough equations and
-  noticeably more packets fall back to QUIC retransmission. That is the deliberate
-  trade-off of the cap: better to leave a packet unrepaired than to overspend;
+- steady-state coverage is about `window * rate` rows, minus the rows that are lost
+  themselves; a loss report can add a repair burst of at most 127 rows, bounded by the
+  256 KB byte credit. Packets fall back to QUIC retransmission when the burst is longer than
+  127 independent rows can express, the credit is exhausted, or the lost packets leave the
+  window before the report arrives. That is the deliberate trade-off of the cap: better to
+  leave a packet unrepaired than to overspend;
 - QUIC streams retransmit, so the value of FEC for TCP traffic is **saving a round trip of
   recovery latency and avoiding a congestion control misjudgement**, not replacing
   retransmission (for UDP/DATAGRAM relay FEC is the only way to get a lost packet back,
@@ -367,6 +405,15 @@ QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 5.1% / 4.8% measu
   loss, four packet bursts, unequal packet sizes, a late packet completing an
   underdetermined equation, the idle tail, acknowledgement-only packets being ignored, the
   overhead cap, and repair frame round-trip/truncation/invalid input;
+- decoder capacity tests: 8/16/17/32/64 consecutive packet bursts must all be reconstructed
+  (`TestFECRecoversLargeBursts`), so the old 16 equation pending cap cannot silently send a
+  larger burst back to retransmission;
+- closed-loop tail burst test: the sender is already idle and can only use previously earned
+  byte credit, while the receiver discovers the tail from the idle flush rows, reports the
+  cumulative evidence, and the sender repairs the whole tail (`TestFECRepairBurstRecoversTailFromFeedback`);
+- periodic-burst simulation: 40k packets with 60 consecutive losses every 2000 packets
+  (`TestFECRepairBurstsRecoverPeriodicLoss`) must recover most of the losses; the old
+  implementation recovered only single digits;
 - a regression test for the burst behaviour: after one report of a burst, six clean reports
   follow, and the redundancy has to stay at the level of the burst. Before the fix it had
   decayed to 0.077 by the third of them;

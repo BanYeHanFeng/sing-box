@@ -75,18 +75,19 @@ BBR 拥塞控制算法配置，可选 `conservative` `standard` `aggressive`。
 一对，属于正常现象（详见 [QUICX FEC](../quicx-fec.zh.md#5-日志与观测)）。
 
 运行期间每 10 秒会输出一条统计（窗口内无 FEC 活动时不输出），默认 debug 级别；窗口"值得关注"
-时提升为 info 级别（每连接每分钟最多一条），例如修复过或放弃过包、收到重复校验行、或对端停发而
-仍有被保护包缺失：
+时提升为 info 级别（每连接每分钟最多一条），例如修复过或放弃过包、收到重复校验行、发送过修复突发、
+或对端停发而仍有被保护包缺失：
 
 ```
 QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 5.1% / 4.8% measured,
   protected 1200 pkts (1.4 MB), parity 96 pkts (112.5 KB), skipped 2 rows (2 budget, 0 too large),
-  dropped 0 frames, rtt 24.6ms (+3.8ms vs min);
+  dropped 0 frames, rtt 24.6ms (+3.8ms vs min), burst 0 rows;
   rx repaired 128, unrecoverable 9, parity 91 pkts, protected 1400 pkts
 ```
 
 `tx` 一列是本端**发送**方向（丢包率由对端观测后回传），`rx` 一列是本端**接收**方向；两者由不同
-端点测量，不要混着看。`skipped` 是被**主动放弃发送**的校验行数（额度不够，或这一行构造不出来）。
+端点测量，不要混着看。`skipped` 是被**主动放弃发送**的校验行数（额度不够，或这一行构造不出来）；
+`burst N rows (M skipped)` 是丢包上报触发的修复突发，括号里的 `skipped` 只属于突发。
 
 #### fec.enabled
 

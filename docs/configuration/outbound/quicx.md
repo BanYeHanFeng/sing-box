@@ -82,13 +82,13 @@ address) for every connection - one more pair per redial is expected
 While FEC is enabled, a statistics line is written every 10 seconds (windows without FEC
 activity are skipped). It is written at debug level, and promoted to info level - at
 most once a minute per connection - when the window is notable (packets were repaired or
-given up on, a duplicate repair row arrived, or the sender went idle with protected
-packets still missing):
+given up on, a duplicate repair row arrived, a repair burst was sent, or the sender went
+idle with protected packets still missing):
 
 ```
 QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 5.1% / 4.8% measured,
   protected 1200 pkts (1.4 MB), parity 96 pkts (112.5 KB), skipped 2 rows (2 budget, 0 too large),
-  dropped 0 frames, rtt 24.6ms (+3.8ms vs min);
+  dropped 0 frames, rtt 24.6ms (+3.8ms vs min), burst 0 rows;
   rx repaired 128, unrecoverable 9, parity 91 pkts, protected 1400 pkts
 ```
 
@@ -96,7 +96,8 @@ The `tx` column is the direction this endpoint **sends** on (the loss rate is me
 the peer and reported back); the `rx` column is the direction it **receives** on. They are
 measured by different endpoints, so don't read them as one number. `skipped` counts the
 repair rows that were deliberately left unsent (the cap's byte credit didn't cover them,
-or the row could not be built).
+or the row could not be built); `burst N rows (M skipped)` counts the rows sent by the
+loss-report-triggered repair burst, with its own skipped rows in parentheses.
 
 #### fec.enabled
 
