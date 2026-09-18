@@ -46,3 +46,38 @@ func TestBuildFECOptionsDisabled(t *testing.T) {
 		t.Fatal("FEC options were built for an explicitly disabled FEC")
 	}
 }
+
+func TestBuildFECOptionsPhase2Defaults(t *testing.T) {
+	options := buildFECOptions(nil)
+	if options == nil {
+		t.Fatal("FEC is enabled by default")
+	}
+	if !options.ExtendedFeedback {
+		t.Fatal("extended feedback is mandatory in the phase 2 build")
+	}
+	if !options.AdaptiveWindow {
+		t.Fatal("adaptive window is enabled by default")
+	}
+	if !options.MultiWindow {
+		t.Fatal("multi-window is enabled by default")
+	}
+	if options.MultiWindowCount != defaultFECMultiWindowCount {
+		t.Fatalf("multi-window count = %d, want %d", options.MultiWindowCount, defaultFECMultiWindowCount)
+	}
+}
+
+func TestBuildFECOptionsPhase2ExplicitFalse(t *testing.T) {
+	options := buildFECOptions(&option.QUICXFECOptions{
+		AdaptiveWindow: fecBoolPtr(false),
+		MultiWindow:    fecBoolPtr(false),
+	})
+	if options == nil {
+		t.Fatal("FEC is enabled by default")
+	}
+	if options.AdaptiveWindow {
+		t.Fatal("explicit adaptive_window:false was ignored")
+	}
+	if options.MultiWindow {
+		t.Fatal("explicit multi_window:false was ignored")
+	}
+}

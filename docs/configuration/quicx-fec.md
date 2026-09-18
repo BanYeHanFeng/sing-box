@@ -12,7 +12,7 @@ links that suddenly lose about 8% of packets and then drop back to clean; set
 lossy path the amount of redundancy follows the measured loss rate, capped by a
 configurable bound.
 
-There is one scheme: the **sliding window scheme**. Repair rows are generated
+There is one base scheme: the **sliding window scheme**. Repair rows are generated
 continuously for the most recent W packets that carry application data, so a lost packet is
 covered by many rows and bursts are reconstructed row by row. The **block scheme** this
 fork used to implement (a closed group of packets protected by a fixed number of parity
@@ -20,6 +20,13 @@ rows) has been removed from quic-go, sing-quic and sing-box: its two structural 
 cannot be fixed by tuning, while the window scheme covers all of its capabilities. This
 page therefore describes the current implementation only; the design notes and measurements
 of the removed scheme were deleted along with it (section 8).
+
+Phase 2 adds three extensions on top of the window scheme: precise missing-range
+feedback (`FEC_FEEDBACK_V2`, capability `0x08`), an RTT/rate adaptive working window,
+and multi-window interleaving (capability `0x04`, effective window `k * max_group_size`).
+This build speaks the phase 2 protocol only: the base `0x02 | 0x08` capability set is
+mandatory, V2 feedback never falls back to the phase 1 cumulative frame, and the
+adaptive/multi-window defaults are on unless explicitly disabled.
 
 ## 1. How Hysteria2 survives loss, and what it costs
 
@@ -193,22 +200,20 @@ burst needs have to be spent before its packets leave the window.
 
 ### 2.6 Negotiation
 
-- the client appends a one byte capability flag to its authentication request: `0x02` is
-  the sliding window scheme (the only scheme this version implements);
-- the server appends the selected scheme after `CommandFECAccept` (also `0x02`), and the
-  client only enables FEC when it reads that byte back and it matches the scheme it
-  announced;
-- an **old client** that only announces the block scheme flag (`0x01`) has no scheme in
-  common with a new server, so **FEC stays off on both sides** and the connection works as
-  usual;
-- a new client talking to an **old server** that only knows the block scheme fails to
-  negotiate in the same way, so FEC stays off (it is never sent window frames it cannot
-  decode);
-- an intermediate version that implemented both schemes and announced `0x03` still
-  interoperates: it supports `0x02`, so both ends run the window scheme;
-- the confirmation **must** carry the scheme byte: a client that cannot read it, or reads a
-  different value, does not enable FEC (it never falls back to enabling one scheme by
-  default).
+This build speaks the **phase 2 protocol only** and does not keep a downgrade path for
+old endpoints:
+
+- the client appends one capability byte to its authentication request: `0x02 | 0x08` is
+  always sent, plus `0x04` when multi-window is enabled:
+  - `0x02`: the sliding window scheme;
+  - `0x04`: multi-window interleaving;
+  - `0x08`: precise missing-range feedback (`FEC_FEEDBACK_V2`), mandatory in phase 2;
+- the server requires both `0x02` and `0x08`; a peer that does not announce both is not
+  supported and FEC stays off instead of falling back to the phase 1 `0x33` feedback;
+- multi-window runs only when both sides announce `0x04` and both local configurations
+  enable it; otherwise the connection uses one window;
+- the confirmation must contain `0x02 | 0x08`; a client that does not receive both base
+  bits (or receives a capability this build does not implement) does not enable FEC.
 
 ## 3. Comparison with HY2 `brutal`
 
@@ -238,7 +243,10 @@ request and FEC is only turned on once the server confirmed it.
     "max_overhead_percent": 30,
     "max_group_size": 128,
     "max_parity_rows": 2,
-    "baseline_redundancy_percent": 5
+    "baseline_redundancy_percent": 5,
+    "adaptive_window": true,
+    "multi_window": true,
+    "multi_window_count": 2
   }
 }
 ```
@@ -259,6 +267,16 @@ request and FEC is only turned on once the server confirmed it.
   default): the sender feeds the loss to its congestion controller without retransmitting,
   so FEC does not hide the congestion signal. Both ends must understand the frame, and an
   older peer can be served by setting it to `false` explicitly;
+- `adaptive_window`: adapt the working window to `RTT * packet rate * 1.5` between `64`
+  and `max_group_size`, with a 20% change held for one second before it is applied
+  (`true` by default). Set it explicitly to `false` to pin the window at
+  `max_group_size`. It changes no wire format;
+- `multi_window` / `multi_window_count`: split the stream into `k` sub-windows assigned
+  by packet number modulo `k` (`true` / `2` by default, `k` at most `4`). Set
+  `multi_window` to `false` for a fixed single window; the connection uses the
+  sub-windows both ends confirmed with capability `0x04`;
+- `repair_burst_rows_per_loss`: internal phase 2 experiment factor (`2.0` by default),
+  the number of repair rows scheduled per missing packet from a V2 report;
 - `fec.scheme` has been removed: there is only one scheme to run, and a config that sets
   the field is rejected as an unknown field.
 
@@ -352,7 +370,18 @@ QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 5.1% / 4.8% measu
     already pending (they can't add rank, only work);
   - `recovered losses N` / `recovered reported N`: only with `recovered_packet_feedback`:
     packets the peer reported as reconstructed (fed to this endpoint's congestion controller
-    without a retransmission) and packets this endpoint reconstructed and reported back.
+    without a retransmission) and packets this endpoint reconstructed and reported back;
+  - `missing-ranges N (X in window, Y repairable)`: V2 missing ranges received in this
+    window, how many named packets were still inside the sender's window, and how many of
+    them a repair row could still describe;
+  - `burst N/M rows (S skipped: B budget, W no-window)`: repair-burst rows sent out of
+    the rows scheduled; skipped rows are split into the byte-credit limit and packets that
+    had already left the window;
+  - `W pps protected` / `peer loss peak P%` / `feedback latency T`: phase 2 observation
+    fields (protected EWMA packet rate, highest peer-reported loss, receiver-side age of
+    the oldest missing packet when the feedback was built);
+  - `window N/M pkts (rtt-adaptive)`: the current working window over the configured
+    maximum, shown while the adaptive or multi-window extension is active.
 - `rate ... / ... measured`: the first value is the sender's current target redundancy
   rate (`max(baseline, 1.5 * measured loss)`, lowered by the cap), the second is
   `parity bytes / protected bytes` **of this window**. The cap applies to the ratio
@@ -391,11 +420,14 @@ QUICX FEC: tx loss 3.4% (peer reported), window 128 pkts, rate 5.1% / 4.8% measu
   since DATAGRAM frames are never retransmitted);
 - with very small packets or a very sparse flow the credit never accumulates enough and the
   row header is a large share of the row, so FEC skips the row (`skipped`);
-- to be evaluated: adapting the window size to the RTT, long runs on real mobile networks,
-  and a more conservative BBR profile while FEC is on (losses are repaired, so there is no
-  need to be as aggressive). A redundancy rate driven by the burstiness of the loss has
-  landed: the redundancy follows the peak measured by a sample large enough to measure the
-  path, held for `max(1 second, the window's span)`, see 2.5.
+- phase 2 landed the core P1/P2/P3 pieces in code: precise missing-range feedback, an
+  RTT/rate adaptive working window, and multi-window interleaving. The base V2 feedback is
+  mandatory, and the adaptive/multi-window options default to on; both can be explicitly
+  disabled. P4 adds the observation fields; the experiment matrix in the phase 2 task book
+  is still the recommended way to collect real-link data before tuning defaults or BBR. A
+  redundancy rate driven by the burstiness of the loss had already landed in phase 1: the
+  redundancy follows the peak measured by a sample large enough to measure the path, held
+  for `max(1 second, the window's span)`, see 2.5.
 
 ## 7. Verified in CI
 

@@ -73,4 +73,22 @@ type QUICXFECOptions struct {
 	// have to understand the FEC_RECOVERED frame, so set it to false only when
 	// the peer does not support it.
 	RecoveredPacketFeedback *bool `json:"recovered_packet_feedback,omitempty"`
+	// AdaptiveWindow lets the sender size its working window from the measured RTT and
+	// packet rate, between a lower bound and MaxGroupSize. It changes no wire format and
+	// is enabled by default in this phase 2 build; set it explicitly to false to pin the
+	// window at MaxGroupSize. A pointer distinguishes "not configured" from false.
+	AdaptiveWindow *bool `json:"adaptive_window,omitempty"`
+	// MultiWindow enables the multi-window scheme (capability 0x04), which splits the
+	// protected stream into independent sub-windows assigned by packet number modulo
+	// the count. It is enabled by default in this phase 2 build; set it explicitly to
+	// false for a fixed single window. The effective window becomes
+	// MultiWindowCount * MaxGroupSize.
+	MultiWindow *bool `json:"multi_window,omitempty"`
+	// MultiWindowCount is the number of sub-windows when MultiWindow is enabled.
+	// Defaults to 2 and is capped at 4.
+	MultiWindowCount int `json:"multi_window_count,omitempty"`
+	// RepairBurstRowsPerLoss is the number of repair rows scheduled per lost packet
+	// after a feedback report. It is an internal experiment value for the phase 2
+	// field measurements; zero keeps the default of 2.0.
+	RepairBurstRowsPerLoss float64 `json:"repair_burst_rows_per_loss,omitempty"`
 }

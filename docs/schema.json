@@ -16858,6 +16858,21 @@
         },
         "recovered_packet_feedback": {
           "type": "boolean"
+        },
+        "adaptive_window": {
+          "type": "boolean",
+          "default": true
+        },
+        "multi_window": {
+          "type": "boolean",
+          "default": true
+        },
+        "multi_window_count": {
+          "type": "integer",
+          "default": 2
+        },
+        "repair_burst_rows_per_loss": {
+          "type": "number"
         }
       },
       "additionalProperties": false

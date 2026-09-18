@@ -114,6 +114,15 @@ const defaultFECBaselineRedundancyPercent = 5
 // fec.recovered_packet_feedback to false explicitly.
 const defaultFECRecoveredPacketFeedback = true
 
+// defaultFECAdaptiveWindow and defaultFECMultiWindow turn on the phase 2 working
+// window and sub-window scheme for new deployments. Both are pointer options so an
+// explicit false still pins the phase 1 fixed single-window behaviour.
+const (
+	defaultFECAdaptiveWindow   = true
+	defaultFECMultiWindow      = true
+	defaultFECMultiWindowCount = 2
+)
+
 // buildFECOptions returns the FEC options for the QUICX client and service. FEC is
 // enabled by default; it is only disabled when explicitly turned off in the
 // configuration.
@@ -124,16 +133,30 @@ func buildFECOptions(options *option.QUICXFECOptions) *quicx.FECOptions {
 	fecOptions := &quicx.FECOptions{
 		BaselineRedundancyPercent: defaultFECBaselineRedundancyPercent,
 		RecoveredPacketFeedback:   defaultFECRecoveredPacketFeedback,
+		ExtendedFeedback:          true,
+		AdaptiveWindow:            defaultFECAdaptiveWindow,
+		MultiWindow:               defaultFECMultiWindow,
+		MultiWindowCount:          defaultFECMultiWindowCount,
 	}
 	if options != nil {
 		fecOptions.MaxOverheadPercent = options.MaxOverheadPercent
 		fecOptions.MaxGroupSize = options.MaxGroupSize
 		fecOptions.MaxParityRows = options.MaxParityRows
+		if options.MultiWindowCount > 0 {
+			fecOptions.MultiWindowCount = options.MultiWindowCount
+		}
+		fecOptions.RepairBurstRowsPerLoss = options.RepairBurstRowsPerLoss
 		if options.BaselineRedundancyPercent != nil {
 			fecOptions.BaselineRedundancyPercent = *options.BaselineRedundancyPercent
 		}
 		if options.RecoveredPacketFeedback != nil {
 			fecOptions.RecoveredPacketFeedback = *options.RecoveredPacketFeedback
+		}
+		if options.AdaptiveWindow != nil {
+			fecOptions.AdaptiveWindow = *options.AdaptiveWindow
+		}
+		if options.MultiWindow != nil {
+			fecOptions.MultiWindow = *options.MultiWindow
 		}
 	}
 	return fecOptions

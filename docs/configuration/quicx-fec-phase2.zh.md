@@ -1,6 +1,12 @@
 # QUICX FEC 二期任务书（待实现）
 
 > 本文是交给后续实现 AI / 工程师的任务书，**只描述方案、协议、代码落点与验收标准，不包含实现**。
+>
+> 状态更新：P1（`0x37` / 能力位 `0x08`）、P2（`adaptive_window`）、P3（`0x38` / 能力位
+> `0x04` / `multi_window`）已在三仓库实现，且按“不考虑兼容性”落为纯二期协议：`0x02 | 0x08`
+> 基础能力强制，`adaptive_window` / `multi_window` 默认开启，不保留旧端点降级路径。
+> P4 已补观测字段与内部实验开关，默认值仍建议按本文 §7 的矩阵在真实链路上验证。
+> 本文中“旧客户端/旧服务端互通、capability 回退”相关验收项在本次实现中不适用。
 > 一期已经落地的内容见 [QUICX FEC](quicx-fec.zh.md)：累计去重丢包证据、丢包触发的修复突发、
 > 127 个 Cauchy 行基、127 条待解方程上限、256 KB 突发额度。
 >
@@ -24,7 +30,7 @@
    更保守，需要长期日志 A/B 才能定论。
 
 二期目标：在上述四类场景中继续提高 `repaired / (repaired + unrecoverable)`，同时**不突破
-`max_overhead_percent` 的长期字节预算**，不破坏旧端点互通。
+`max_overhead_percent` 的长期字节预算**，不保留旧端点互通。
 
 非目标：
 
@@ -138,7 +144,7 @@ const (
 
 - 新客户端发 `0x02 | 0x08`（若同时声明多窗口则加 `0x04`）；
 - 新服务端确认自己支持且双方都有的最高能力组合；
-- 旧服务端会 `& 0x02` 后确认 `0x02`，新客户端自动退回一期行为；
+- ~~旧服务端会 `& 0x02` 后确认 `0x02`，新客户端自动退回一期行为~~（纯二期实现不适用）；
 - 确认必须逐 bit 校验，不得接受客户端没声明、或本地未实现的 bit。
 
 新增帧 `0x37 FEC_FEEDBACK_V2`（建议编号，不能与 `0x36 FEC_RECOVERED` 冲突）：
@@ -167,7 +173,7 @@ const (
 
 兼容：
 
-- 未协商 `0x08` 的旧端点只收发 `0x33`；
+- ~~未协商 `0x08` 的旧端点只收发 `0x33`~~（纯二期实现强制 `0x08`）；
 - 新端点两种帧都能解析，发送哪种由协商结果决定；
 - `wire.IsFECFrameType`、`handleFrame` 的 `case`、`frame_format` / 解析入口全部要补。
 
@@ -230,7 +236,7 @@ const (
 - 构造反馈前丢失包全部离开窗口（高 pps + 长反馈延迟），断言不出现无效 burst，且速率
   降至低冗余而不是卡在上限；
 - 约 12% 随机丢包、每 32 包 4 连突发，payload 校验一致；
-- 旧端点兼容：客户端/服务端一方不支持 `0x08` 时连接正常，行为退回 `0x33`。
+- ~~旧端点兼容~~（不考虑兼容性，已删除降级分支）。
 
 **sing-box 端到端**：
 
@@ -242,7 +248,7 @@ const (
 
 - 可修窗口内突发（<=127 行可表达）修复率 `repaired / (repaired+unrecoverable) >= 90%`；
 - 反馈包单帧不超过 datagram；恶意 128 个区间不会导致内存/CPU 无界增长；
-- 不支持新 bit 的旧端点退化为一期能力，无连接失败；
+- ~~不支持新 bit 的旧端点退化为一期能力，无连接失败~~（基础能力 `0x02 | 0x08` 为强制要求）。
 - 长期 `measured parity bytes / protected bytes <= max_overhead_percent` 不被突破。
 
 ---
@@ -440,7 +446,7 @@ fecCapabilityMultiWindow = 0x04
 
 ### 8.2 sing-quic
 
-- [ ] `FECOptions` 增加 `ExtendedFeedback`、`MultiWindow`、`AdaptiveWindow`（含默认关闭的兼容策略）；
+- [x] `FECOptions` 增加 `ExtendedFeedback`、`MultiWindow`、`AdaptiveWindow`（基础能力强制；多窗口/自适应默认开启，可显式关闭）；
 - [ ] capability `fecCapabilityWindow | fecCapabilityMissingRanges | fecCapabilityMultiWindow`；
 - [ ] `startFEC` / `notifyFECAccept` 逐 bit 协商，旧服务端自动回退；
 - [ ] `formatFECStats` 输出新字段；
@@ -448,7 +454,7 @@ fecCapabilityMultiWindow = 0x04
 
 ### 8.3 sing-box
 
-- [ ] `option/quicx.go` 增加 P2/P3/P4 配置项（建议默认关闭，等二期稳定后再评估默认值）；
+- [x] `option/quicx.go` 增加 P2/P3/P4 配置项（`adaptive_window` / `multi_window` 默认开启，指针字段支持显式关闭）；
 - [ ] `protocol/quicx/inbound.go` / `outbound.go` 透传；
 - [ ] `docs/schema.json`、中英文 `quicx-fec` 文档同步；
 - [ ] FEC CI 增加“新版/旧版混合协商”和“P1/P3 突发”用例；
@@ -461,7 +467,7 @@ fecCapabilityMultiWindow = 0x04
 1. **PR-A**：P1 协议与反馈基础设施（`0x37`、capability `0x08`、单测）；
 2. **PR-B**：P1 发送端精确 burst（依赖 PR-A）；
 3. **PR-C**：P2 RTT 自适应窗口（独立，无协议变更）；
-4. **PR-D**：P3 多子窗口（依赖 PR-A/PR-B，建议默认关闭）；
+4. **PR-D**：P3 多子窗口（依赖 PR-A/PR-B，默认开启但可配置关闭）；
 5. **PR-E**：P4 观测字段与实验开关（可以最早合，用于收集数据）；
 6. **PR-F**：文档、默认值与 CI 验收更新。
 
@@ -474,9 +480,9 @@ fecCapabilityMultiWindow = 0x04
 
 | 风险 | 缓解 |
 | --- | --- |
-| 新帧类型与旧端点冲突 | capability 协商后才发送；未协商时只用 `0x33/0x34` |
+| 新帧类型与旧端点冲突 | 不考虑兼容性；纯二期固定发送 `0x33/0x34/0x37/0x38` 能力组合 |
 | 缺失区间反馈过大导致 ACK 包超 MTU | `Length()` 预算检查，超限截断区间数 |
-| 多子窗口内存增长 | `k <= 4`、共享额度、默认关闭、上线前 profiler |
+| 多子窗口内存增长 | `k <= 4`、共享额度、默认开启但可配置关闭、上线前 profiler |
 | 动态窗口抖动 | 滞回 + 最小调整间隔 + 仅影响后续行 |
 | 精确 burst 可能更浪费在中继场景 | 仍受 `max_overhead_percent` 约束；保留 `skipped` 统计 |
 | 默认值变更导致线上带宽上升 | P4 先出报告，后改默认值；提供显式配置覆盖 |
@@ -492,7 +498,7 @@ fecCapabilityMultiWindow = 0x04
 
 ## 11. 验收总表
 
-- [ ] P1：窗口内可修突发修复率 >= 90%，旧端点无感降级；
+- [ ] P1：窗口内可修突发修复率 >= 90%（旧端点兼容项作废）；
 - [ ] P2：RTT/速率变化时窗口按滞回调整，干净链路零冗余不回归；
 - [ ] P3：有效窗口提升到 `k*128`，高 pps 突发修复率相对单窗口显著提升，内存上限有报告；
 - [ ] P4：完成实验矩阵与真实链路报告，给出基线默认值结论；
