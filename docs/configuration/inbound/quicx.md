@@ -63,7 +63,7 @@ How the server handles quicx authentication failures and standard HTTP/3 request
 | Policy       | Description                                                                                     |
 |--------------|-------------------------------------------------------------------------------------------------|
 | `h3_close`   | Close the QUIC connection with `H3_NO_ERROR`, like a normal HTTP/3 connection close. |
-| `silent_drop`| Silently drop the connection without sending `CONNECTION_CLOSE`; the prober only sees a timeout.|
+| `silent_drop`| Silently drop the connection without sending `CONNECTION_CLOSE`; the prober only sees a timeout. The connection is only kept for a grace period (30 seconds by default) and is reclaimed locally afterwards, so a peer sending keepalives cannot pin its resources.|
 
 `h3_close` is used by default.
 
@@ -87,4 +87,5 @@ See [QUIC Fields](/configuration/shared/quic/) for details.
 
 Standard HTTP/3 requests that are not QUICX proxy traffic do not establish a
 proxy connection; they are terminated following `auth_failure_policy`: closed
-with `H3_NO_ERROR` for `h3_close`, or silently dropped for `silent_drop`.
+with `H3_NO_ERROR` for `h3_close`, or silently dropped for `silent_drop` (no
+close frame is sent during the grace period).

@@ -63,7 +63,7 @@ QUICX 用户密码
 | 策略           | 描述                                                       |
 |--------------|----------------------------------------------------------|
 | `h3_close`   | 以 `H3_NO_ERROR` 关闭 QUIC 连接，等同标准 HTTP/3 正常关闭。 |
-| `silent_drop`| 静默丢弃连接、不发送 `CONNECTION_CLOSE`，探测者只能得到超时。                |
+| `silent_drop`| 静默丢弃连接、不立即发送 `CONNECTION_CLOSE`，探测者只能得到超时；服务端仅在宽限期（默认 30 秒）内保留该连接，之后本地回收，避免对端 keepalive 长期占用资源。 |
 
 默认使用 `h3_close`。
 
@@ -86,4 +86,4 @@ ALPN 必须为 `h3`。
 参阅 [QUIC 字段](/zh/configuration/shared/quic/) 了解详情。
 
 非 QUICX 代理流量的标准 HTTP/3 请求不会建立代理连接，而是按 `auth_failure_policy` 关闭：
-`h3_close` 时以 `H3_NO_ERROR` 标准关闭，`silent_drop` 时静默丢弃。
+`h3_close` 时以 `H3_NO_ERROR` 标准关闭，`silent_drop` 时静默丢弃（宽限期内不发送任何关闭帧）。
