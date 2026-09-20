@@ -71,6 +71,13 @@ TLS 配置，参阅 [TLS](/zh/configuration/shared/tls/#出站)。
 
 ALPN 必须为 `h3`。
 
+### 0-RTT
+
+当存在上一次连接留下的会话票据时，QUICX 会尝试 0-RTT 连接握手，在隧道重建时节省一个往返。由于协议是完全复用的，这对性能影响不大。
+
+!!! warning ""
+    0-RTT 数据容易受到重放攻击，对非幂等请求存在实际风险。服务端接受它是因为传输层需要与标准 HTTP/3 服务器不可分辨。
+
 ### QUIC 字段
 
 参阅 [QUIC 字段](/zh/configuration/shared/quic/) 了解详情。

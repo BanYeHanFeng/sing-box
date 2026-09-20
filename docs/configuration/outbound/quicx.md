@@ -71,6 +71,18 @@ TLS configuration, see [TLS](/configuration/shared/tls/#outbound).
 
 The ALPN must be `h3`.
 
+### 0-RTT
+
+QUICX attempts a 0-RTT connection handshake whenever a session ticket from a
+previous connection is available, saving one round trip when the tunnel is
+re-established. As the protocol is fully multiplexed this is not impacting much
+on the performance.
+
+!!! warning ""
+    0-RTT data is vulnerable to replay attacks, which matters for non-idempotent
+    requests. The server only accepts it because the transport is indistinguishable
+    from a standard HTTP/3 server.
+
 ### QUIC Fields
 
 See [QUIC Fields](/configuration/shared/quic/) for details.
