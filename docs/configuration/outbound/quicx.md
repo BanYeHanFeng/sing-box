@@ -78,6 +78,11 @@ previous connection is available, saving one round trip when the tunnel is
 re-established. As the protocol is fully multiplexed this is not impacting much
 on the performance.
 
+When the server rejects the attempt (for example after a restart, a session
+ticket key change, or an anti-replay rejection), the client resends the
+authentication and the first request after the handshake completes instead of
+closing the connection.
+
 !!! warning ""
     0-RTT data is vulnerable to replay attacks, which matters for non-idempotent
     requests. The server only accepts it because the transport is indistinguishable
