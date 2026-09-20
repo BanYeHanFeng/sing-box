@@ -16,7 +16,8 @@ import (
 )
 
 // TestQUICXSelf runs the QUICX inbound and outbound of one instance against
-// each other, including a client restart that forces a new QUIC connection.
+// each other, including a client restart that forces a new QUIC connection. The
+// suite covers TCP, UDP and UDP messages which have to be fragmented.
 func TestQUICXSelf(t *testing.T) {
 	caPem, certPem, keyPem := createSelfSignedCertificate(t, "example.org")
 	caPemContent, err := os.ReadFile(caPem)
@@ -100,5 +101,5 @@ func TestQUICXSelf(t *testing.T) {
 			},
 		},
 	})
-	testTCP(t, clientPort, testPort)
+	testSuit(t, clientPort, testPort)
 }

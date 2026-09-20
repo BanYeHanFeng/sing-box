@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/binary"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +21,9 @@ import (
 	"github.com/sagernet/sing-box/option"
 	qtls "github.com/sagernet/sing-quic"
 	"github.com/sagernet/sing-quic/quicx"
+	"github.com/sagernet/sing/common/auth"
+	"github.com/sagernet/sing/common/buf"
+	F "github.com/sagernet/sing/common/format"
 	"github.com/sagernet/sing/common/logger"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
@@ -25,60 +31,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestQUICXZeroRTT proves that a QUICX client really sends 0-RTT data. The box
+const quicxTestPassword = "password"
+
+var quicxTestDestination = M.ParseSocksaddrHostPort("example.com", 80)
+
+// TestQUICXZeroRTT proves that a QUICX client really sends 0-RTT data and that
+// the authenticated session works on the resumed connection. The box
 // configuration has no switch for this, so the QUICX client and server are
 // driven directly here with a qlog tracer injected, which is the only way to
 // observe the packet types of a connection.
 func TestQUICXZeroRTT(t *testing.T) {
-	_, certPem, keyPem := createSelfSignedCertificate(t, "example.org")
+	ctx := context.Background()
 	qlogDir := t.TempDir()
 	t.Setenv("QLOGDIR", qlogDir)
-
-	ctx := context.Background()
-	serverTLS, err := boxTLS.NewServer(ctx, logger.NOP(), option.InboundTLSOptions{
-		Enabled:         true,
-		CertificatePath: certPem,
-		KeyPath:         keyPem,
-		ALPN:            []string{"h3"},
-	})
-	require.NoError(t, err)
-	service, err := quicx.NewService[int](quicx.ServiceOptions{
-		Context:     ctx,
-		Logger:      logger.NOP(),
-		TLSConfig:   serverTLS,
-		QUICOptions: qtls.QUICOptions{},
-		Handler:     quicxTestHandler{},
-		Tracer:      quicxTestTracer,
-	})
-	require.NoError(t, err)
-	packetConn, err := net.ListenPacket("udp", "127.0.0.1:0")
-	require.NoError(t, err)
-	require.NoError(t, service.Start(packetConn))
-	t.Cleanup(func() {
-		service.Close()
-		packetConn.Close()
-	})
-
-	clientTLS, err := boxTLS.NewClient(ctx, logger.NOP(), "example.org", option.OutboundTLSOptions{
-		Enabled:    true,
-		ServerName: "example.org",
-		Insecure:   true,
-		ALPN:       []string{"h3"},
-	})
-	require.NoError(t, err)
-	client, err := quicx.NewClient(quicx.ClientOptions{
-		Context:       ctx,
-		Dialer:        &quicxTestDialer{},
-		ServerAddress: M.SocksaddrFromNet(packetConn.LocalAddr()),
-		TLSConfig:     clientTLS,
-		QUICOptions:   qtls.QUICOptions{},
-		Password:      "password",
-		Tracer:        quicxTestTracer,
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		client.CloseWithError(os.ErrClosed)
-	})
+	server := startQUICXTestServer(t, ctx, []string{quicxTestPassword}, quicxTestTracer)
+	client, clientTLS := newQUICXTestClient(t, ctx, server.address, quicxTestPassword, quicxTestTracer)
 
 	// A session ticket is required before 0-RTT can be attempted, and the client
 	// has to install the cache for it on its own.
@@ -88,22 +55,25 @@ func TestQUICXZeroRTT(t *testing.T) {
 	cache := &quicxTestSessionCache{inner: stdConfig.ClientSessionCache}
 	stdConfig.ClientSessionCache = cache
 
-	var firstStream net.Conn
-	for dial := 1; dial <= 2; dial++ {
-		stream, err := client.DialConn(ctx, M.ParseSocksaddrHostPort("example.com", testPort))
-		require.NoError(t, err)
-		_, err = stream.Write([]byte("ping"))
-		require.NoError(t, err)
-		// The session ticket of the handshake arrives with a delay.
-		time.Sleep(2 * time.Second)
-		if dial == 1 {
-			firstStream = stream
-		} else {
-			stream.Close()
-		}
-	}
-	firstStream.Close()
-	time.Sleep(500 * time.Millisecond)
+	// The first connection performs a full handshake and authenticates with the
+	// configured user.
+	firstConn, err := client.DialConn(ctx, quicxTestDestination)
+	require.NoError(t, err)
+	quicxEchoConn(t, firstConn, []byte("ping"))
+	require.Equal(t, []int{0}, server.handler.userList(), "the first connection was not authenticated")
+
+	// The session ticket of the handshake arrives with a delay.
+	time.Sleep(2 * time.Second)
+	require.NoError(t, firstConn.Close())
+	// Force a new QUIC connection: the interesting case is the re-established
+	// tunnel, which resumes the session and sends its authentication in 0-RTT.
+	client.CloseWithError(os.ErrClosed)
+
+	secondConn, err := client.DialConn(ctx, quicxTestDestination)
+	require.NoError(t, err)
+	quicxEchoConn(t, secondConn, []byte("pong"))
+	require.NoError(t, secondConn.Close())
+	require.Equal(t, []int{0, 0}, server.handler.userList(), "the resumed connection was not authenticated")
 
 	require.GreaterOrEqual(t, cache.gets, 2, "the second connection did not look for a resumed session")
 	traces, err := filepath.Glob(filepath.Join(qlogDir, "*_client.sqlog"))
@@ -112,6 +82,254 @@ func TestQUICXZeroRTT(t *testing.T) {
 	trace, err := os.ReadFile(quicxTestNewest(t, traces))
 	require.NoError(t, err)
 	require.Contains(t, string(trace), `"packet_type":"0RTT"`, "the second connection did not send any 0-RTT packet")
+}
+
+// TestQUICXZeroRTTRejected covers a 0-RTT attempt which the server rejects: a
+// session ticket is only usable by the server which issued it, so a restarted or
+// re-keyed server answers with a full handshake and discards all early data.
+// quic-go cannot always report that on the write which buffered the message, so
+// the client has to resend the authentication after the handshake instead of
+// closing the connection.
+func TestQUICXZeroRTTRejected(t *testing.T) {
+	ctx := context.Background()
+	qlogDir := t.TempDir()
+	t.Setenv("QLOGDIR", qlogDir)
+	serverA := startQUICXTestServer(t, ctx, []string{quicxTestPassword}, quicxTestTracer)
+	serverB := startQUICXTestServer(t, ctx, []string{quicxTestPassword}, quicxTestTracer)
+	setQUICXTestTicketKey(t, serverA, 0x11)
+	setQUICXTestTicketKey(t, serverB, 0x22)
+
+	// Both clients share one TLS configuration, and therefore one session cache:
+	// the ticket issued by server A is offered to server B.
+	clientTLS := newQUICXTestClientTLS(t, ctx)
+	clientA, err := quicx.NewClient(quicx.ClientOptions{
+		Context:       ctx,
+		Dialer:        &quicxTestDialer{},
+		ServerAddress: serverA.address,
+		TLSConfig:     clientTLS,
+		QUICOptions:   qtls.QUICOptions{},
+		Password:      quicxTestPassword,
+		Tracer:        quicxTestTracer,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		clientA.CloseWithError(os.ErrClosed)
+	})
+	clientB, err := quicx.NewClient(quicx.ClientOptions{
+		Context:       ctx,
+		Dialer:        &quicxTestDialer{},
+		ServerAddress: serverB.address,
+		TLSConfig:     clientTLS,
+		QUICOptions:   qtls.QUICOptions{},
+		Password:      quicxTestPassword,
+		Tracer:        quicxTestTracer,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		clientB.CloseWithError(os.ErrClosed)
+	})
+	stdConfig, err := clientTLS.STDConfig()
+	require.NoError(t, err)
+	require.NotNil(t, stdConfig.ClientSessionCache)
+	cache := &quicxTestSessionCache{inner: stdConfig.ClientSessionCache}
+	stdConfig.ClientSessionCache = cache
+
+	connA, err := clientA.DialConn(ctx, quicxTestDestination)
+	require.NoError(t, err)
+	quicxEchoConn(t, connA, []byte("ping"))
+	// The session ticket is delivered after the handshake completed.
+	time.Sleep(2 * time.Second)
+
+	connB, err := clientB.DialConn(ctx, quicxTestDestination)
+	require.NoError(t, err)
+	// Without the resend after the rejected 0-RTT attempt the server never
+	// authenticates the session and this echo times out.
+	quicxEchoConn(t, connB, []byte("pong"))
+	require.NoError(t, connB.Close())
+	require.Equal(t, []int{0}, serverA.handler.userList())
+	require.Equal(t, []int{0}, serverB.handler.userList(), "the rejected 0-RTT authentication was not retried")
+
+	require.GreaterOrEqual(t, cache.gets, 1, "the second connection did not look for a resumed session")
+	traces, err := filepath.Glob(filepath.Join(qlogDir, "*_client.sqlog"))
+	require.NoError(t, err)
+	require.NotEmpty(t, traces, "no client qlog traces were written")
+	require.True(t, quicxTestAnyTraceContains(t, traces, `"packet_type":"0RTT"`), "no client connection attempted 0-RTT")
+}
+
+// TestQUICXConcurrentAuthentication covers two authentication streams racing on
+// one connection. Publishing the authenticated user used to be a check-then-act
+// sequence, so the second stream closed the notification channel a second time
+// and panicked with "close of closed channel", killing the process.
+func TestQUICXConcurrentAuthentication(t *testing.T) {
+	ctx := context.Background()
+	server := startQUICXTestServer(t, ctx, []string{quicxTestPassword}, nil)
+	authHeader := []byte{quicx.Version, quicx.CommandAuthenticate}
+	authBody := make([]byte, 2+len(quicxTestPassword))
+	binary.BigEndian.PutUint16(authBody[0:2], uint16(len(quicxTestPassword)))
+	copy(authBody[2:], quicxTestPassword)
+	for round := 0; round < 8; round++ {
+		conn := dialRawQUICX(t, ctx, server.address, &quic.Config{EnableDatagrams: true})
+		streams := make([]*quic.SendStream, 2)
+		for index := range streams {
+			stream, err := conn.OpenUniStream()
+			require.NoError(t, err)
+			_, err = stream.Write(authHeader)
+			require.NoError(t, err)
+			streams[index] = stream
+		}
+		// Both handlers are blocked reading the password length now, so the
+		// passwords wake them up at the same time.
+		time.Sleep(100 * time.Millisecond)
+		var group sync.WaitGroup
+		for _, stream := range streams {
+			group.Add(1)
+			go func(stream *quic.SendStream) {
+				defer group.Done()
+				_, _ = stream.Write(authBody)
+				_ = stream.Close()
+			}(stream)
+		}
+		group.Wait()
+		// A duplicate authentication request must not take the session down: the
+		// session stays authenticated and usable.
+		rawQUICXEcho(t, conn, []byte("ping"))
+	}
+	require.NotEmpty(t, server.handler.userList())
+}
+
+// TestQUICXSmallDatagramLimit covers a peer forging a tiny
+// max_datagram_frame_size: the packet size derived from the reported DATAGRAM
+// limit must never become negative or zero, otherwise fragmenting a UDP message
+// panics or loops forever.
+func TestQUICXSmallDatagramLimit(t *testing.T) {
+	ctx := context.Background()
+	server := startQUICXTestServer(t, ctx, []string{quicxTestPassword}, nil)
+	conn := dialRawQUICX(t, ctx, server.address, &quic.Config{
+		EnableDatagrams:      true,
+		MaxDatagramFrameSize: 1,
+	})
+	rawQUICXAuthenticate(t, conn, quicxTestPassword)
+	rawQUICXEcho(t, conn, []byte("ping"))
+	// The echo handler answers with a DATAGRAM, which the forged peer limit
+	// rejects: the server has to report the error instead of panicking.
+	rawQUICXSendUDPMessage(t, conn, 1, 1, 1, 0, []byte("datagram"))
+	require.Eventually(t, func() bool {
+		return server.handler.udpPackets.Load() >= 1
+	}, 5*time.Second, 50*time.Millisecond, "the server did not receive the UDP message")
+	require.Eventually(t, func() bool {
+		return server.handler.udpWriteErrors.Load() >= 1
+	}, 5*time.Second, 50*time.Millisecond, "the server did not try to answer the UDP message")
+	// The session is still usable and the service is still alive.
+	rawQUICXEcho(t, conn, []byte("pong"))
+	requireQUICXServiceAlive(t, ctx, server)
+}
+
+// TestQUICXFragmentLengthOverflow covers a peer sending more fragment data than
+// the uint16 length field of the protocol can express. The accumulated length
+// used to wrap around, allocating a buffer which is too small and panicking with
+// "short buffer".
+func TestQUICXFragmentLengthOverflow(t *testing.T) {
+	ctx := context.Background()
+	server := startQUICXTestServer(t, ctx, []string{quicxTestPassword}, nil)
+	conn := dialRawQUICX(t, ctx, server.address, &quic.Config{EnableDatagrams: true})
+	rawQUICXAuthenticate(t, conn, quicxTestPassword)
+	rawQUICXEcho(t, conn, []byte("ping"))
+	// 70 fragments of 1000 bytes are 70000 bytes in total, which is more than
+	// the reassembled message length field can hold. DATAGRAM frames are not
+	// retransmitted, so the fragments are paced and repeated until the server
+	// rejects the message.
+	const (
+		fragmentTotal = 70
+		fragmentSize  = 1000
+	)
+	for attempt := 0; attempt < 5 && !quicxConnectionClosed(conn); attempt++ {
+		for index := 0; index < fragmentTotal; index++ {
+			rawQUICXSendUDPMessage(t, conn, 1, 1, fragmentTotal, uint8(index), bytes.Repeat([]byte{byte(index)}, fragmentSize))
+			time.Sleep(2 * time.Millisecond)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	// The protocol violation terminates the offending session instead of
+	// crashing the service.
+	require.Eventually(t, func() bool {
+		return quicxConnectionClosed(conn)
+	}, 5*time.Second, 50*time.Millisecond, "the server did not reject the oversized reassembly")
+	requireQUICXServiceAlive(t, ctx, server)
+}
+
+// quicxConnectionClosed reports whether the connection is gone.
+func quicxConnectionClosed(conn *quic.Conn) bool {
+	select {
+	case <-conn.Context().Done():
+		return true
+	default:
+		return false
+	}
+}
+
+// TestQUICXWrongPassword covers the authentication failure path: a session which
+// cannot authenticate must not serve any request, must not crash the service and
+// must not be reported as authenticated.
+func TestQUICXWrongPassword(t *testing.T) {
+	ctx := context.Background()
+	server := startQUICXTestServer(t, ctx, []string{quicxTestPassword}, nil)
+	conn := dialRawQUICX(t, ctx, server.address, &quic.Config{EnableDatagrams: true})
+	rawQUICXAuthenticate(t, conn, "wrong-password")
+	stream, err := conn.OpenStream()
+	require.NoError(t, err)
+	defer stream.Close()
+	request := buf.NewSize(2 + quicx.AddressSerializer.AddrPortLen(quicxTestDestination) + 4)
+	defer request.Release()
+	request.WriteByte(quicx.Version)
+	request.WriteByte(quicx.CommandConnect)
+	require.NoError(t, quicx.AddressSerializer.WriteAddrPort(request, quicxTestDestination))
+	request.Write([]byte("ping"))
+	_, err = stream.Write(request.Bytes())
+	require.NoError(t, err)
+	require.NoError(t, stream.SetReadDeadline(time.Now().Add(5*time.Second)))
+	response := make([]byte, 4)
+	_, err = io.ReadFull(stream, response)
+	require.Error(t, err, "an unauthenticated session served a request")
+	require.Empty(t, server.handler.userList(), "an unauthenticated session reached the handler")
+	requireQUICXServiceAlive(t, ctx, server)
+}
+
+// TestQUICXNormalCloseLogsNoError covers a session which ends because the peer
+// closed the connection: the real reason must be preserved and reported below
+// the error level, instead of replacing it with "connection closed" and logging
+// every close as a failure.
+func TestQUICXNormalCloseLogsNoError(t *testing.T) {
+	ctx := context.Background()
+	testLogger := &quicxTestLogger{Logger: logger.NOP()}
+	server := startQUICXTestServerWithLogger(t, ctx, []string{quicxTestPassword}, testLogger, nil)
+	client, _ := newQUICXTestClient(t, ctx, server.address, quicxTestPassword, nil)
+	conn, err := client.DialConn(ctx, quicxTestDestination)
+	require.NoError(t, err)
+	quicxEchoConn(t, conn, []byte("ping"))
+	require.NoError(t, conn.Close())
+	client.CloseWithError(os.ErrClosed)
+	// Give the service time to observe the closed connection.
+	time.Sleep(500 * time.Millisecond)
+	require.Empty(t, testLogger.errorList(), "a normal close was reported as an error")
+}
+
+// quicxTestLogger records the error level messages of a service.
+type quicxTestLogger struct {
+	logger.Logger
+	access sync.Mutex
+	errors []string
+}
+
+func (l *quicxTestLogger) Error(args ...any) {
+	l.access.Lock()
+	l.errors = append(l.errors, F.ToString(args...))
+	l.access.Unlock()
+}
+
+func (l *quicxTestLogger) errorList() []string {
+	l.access.Lock()
+	defer l.access.Unlock()
+	return append([]string{}, l.errors...)
 }
 
 func quicxTestTracer(ctx context.Context, isClient bool, connID quic.ConnectionID) qlogwriter.Trace {
@@ -135,6 +353,20 @@ func quicxTestNewest(t *testing.T, paths []string) string {
 	return newest
 }
 
+func quicxTestAnyTraceContains(t *testing.T, paths []string, content string) bool {
+	t.Helper()
+	for _, path := range paths {
+		trace, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if bytes.Contains(trace, []byte(content)) {
+			return true
+		}
+	}
+	return false
+}
+
 // quicxTestSessionCache counts how often the installed cache is consulted.
 type quicxTestSessionCache struct {
 	inner  tls.ClientSessionCache
@@ -154,6 +386,207 @@ func (c *quicxTestSessionCache) Put(key string, session *tls.ClientSessionState)
 	c.inner.Put(key, session)
 }
 
+// quicxTestServer is a QUICX service serving an echo handler on a random
+// loopback port.
+type quicxTestServer struct {
+	service   *quicx.Service[int]
+	tlsConfig boxTLS.ServerConfig
+	address   M.Socksaddr
+	handler   *quicxTestEchoHandler
+}
+
+func startQUICXTestServer(t *testing.T, ctx context.Context, passwords []string, tracer func(ctx context.Context, isClient bool, connID quic.ConnectionID) qlogwriter.Trace) *quicxTestServer {
+	t.Helper()
+	return startQUICXTestServerWithLogger(t, ctx, passwords, logger.NOP(), tracer)
+}
+
+func startQUICXTestServerWithLogger(t *testing.T, ctx context.Context, passwords []string, serviceLogger logger.Logger, serviceTracer func(ctx context.Context, isClient bool, connID quic.ConnectionID) qlogwriter.Trace) *quicxTestServer {
+	t.Helper()
+	// The service context is canceled on cleanup, which terminates the sessions
+	// of connections a test did not close itself, exactly like a shutdown of the
+	// owning instance does.
+	ctx, cancelService := context.WithCancel(ctx)
+	_, certPem, keyPem := createSelfSignedCertificate(t, "example.org")
+	serverTLS, err := boxTLS.NewServer(ctx, logger.NOP(), option.InboundTLSOptions{
+		Enabled:         true,
+		CertificatePath: certPem,
+		KeyPath:         keyPem,
+		ALPN:            []string{"h3"},
+	})
+	require.NoError(t, err)
+	handler := &quicxTestEchoHandler{}
+	service, err := quicx.NewService[int](quicx.ServiceOptions{
+		Context:     ctx,
+		Logger:      serviceLogger,
+		TLSConfig:   serverTLS,
+		QUICOptions: qtls.QUICOptions{},
+		UDPTimeout:  5 * time.Minute,
+		Handler:     handler,
+		Tracer:      serviceTracer,
+	})
+	require.NoError(t, err)
+	userList := make([]int, 0, len(passwords))
+	passwordList := make([]string, 0, len(passwords))
+	for index, password := range passwords {
+		userList = append(userList, index)
+		passwordList = append(passwordList, password)
+	}
+	service.UpdateUsers(userList, passwordList)
+	packetConn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	require.NoError(t, service.Start(packetConn))
+	t.Cleanup(func() {
+		cancelService()
+		service.Close()
+		packetConn.Close()
+	})
+	return &quicxTestServer{
+		service:   service,
+		tlsConfig: serverTLS,
+		address:   M.SocksaddrFromNet(packetConn.LocalAddr()),
+		handler:   handler,
+	}
+}
+
+// setQUICXTestTicketKey pins the TLS session ticket keys of a test server, which
+// is how a restarted or re-keyed server rejects a 0-RTT attempt.
+func setQUICXTestTicketKey(t *testing.T, server *quicxTestServer, seed byte) {
+	t.Helper()
+	stdConfig, err := server.tlsConfig.STDConfig()
+	require.NoError(t, err)
+	var ticketKey [32]byte
+	for index := range ticketKey {
+		ticketKey[index] = seed
+	}
+	stdConfig.SetSessionTicketKeys([][32]byte{ticketKey})
+}
+
+func newQUICXTestClientTLS(t *testing.T, ctx context.Context) boxTLS.Config {
+	t.Helper()
+	clientTLS, err := boxTLS.NewClient(ctx, logger.NOP(), "example.org", option.OutboundTLSOptions{
+		Enabled:    true,
+		ServerName: "example.org",
+		Insecure:   true,
+		ALPN:       []string{"h3"},
+	})
+	require.NoError(t, err)
+	return clientTLS
+}
+
+func newQUICXTestClient(t *testing.T, ctx context.Context, serverAddress M.Socksaddr, password string, tracer func(ctx context.Context, isClient bool, connID quic.ConnectionID) qlogwriter.Trace) (*quicx.Client, boxTLS.Config) {
+	t.Helper()
+	clientTLS := newQUICXTestClientTLS(t, ctx)
+	client, err := quicx.NewClient(quicx.ClientOptions{
+		Context:       ctx,
+		Dialer:        &quicxTestDialer{},
+		ServerAddress: serverAddress,
+		TLSConfig:     clientTLS,
+		QUICOptions:   qtls.QUICOptions{},
+		Password:      password,
+		Tracer:        tracer,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		client.CloseWithError(os.ErrClosed)
+	})
+	return client, clientTLS
+}
+
+// quicxEchoConn writes payload on conn and verifies that the echo handler sends
+// it back.
+func quicxEchoConn(t *testing.T, conn net.Conn, payload []byte) {
+	t.Helper()
+	require.NoError(t, conn.SetDeadline(time.Now().Add(10*time.Second)))
+	_, err := conn.Write(payload)
+	require.NoError(t, err)
+	response := make([]byte, len(payload))
+	_, err = io.ReadFull(conn, response)
+	require.NoError(t, err)
+	require.Equal(t, payload, response)
+	require.NoError(t, conn.SetDeadline(time.Time{}))
+}
+
+// requireQUICXServiceAlive verifies that the service still authenticates and
+// serves a new client after a malformed session was handled.
+func requireQUICXServiceAlive(t *testing.T, ctx context.Context, server *quicxTestServer) {
+	t.Helper()
+	client, _ := newQUICXTestClient(t, ctx, server.address, quicxTestPassword, nil)
+	conn, err := client.DialConn(ctx, quicxTestDestination)
+	require.NoError(t, err)
+	defer conn.Close()
+	quicxEchoConn(t, conn, []byte("alive"))
+}
+
+// dialRawQUICX establishes a raw QUIC connection to a test service, which allows
+// the tests to speak the QUICX wire protocol directly.
+func dialRawQUICX(t *testing.T, ctx context.Context, serverAddress M.Socksaddr, quicConfig *quic.Config) *quic.Conn {
+	t.Helper()
+	clientTLS := newQUICXTestClientTLS(t, ctx)
+	udpConn, err := net.Dial("udp", serverAddress.String())
+	require.NoError(t, err)
+	conn, err := qtls.DialEarly(ctx, udpConn, clientTLS, quicConfig)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		conn.CloseWithError(0, "")
+		udpConn.Close()
+	})
+	return conn
+}
+
+func rawQUICXAuthenticate(t *testing.T, conn *quic.Conn, password string) {
+	t.Helper()
+	stream, err := conn.OpenUniStream()
+	require.NoError(t, err)
+	authRequest := make([]byte, 4+len(password))
+	authRequest[0] = quicx.Version
+	authRequest[1] = quicx.CommandAuthenticate
+	binary.BigEndian.PutUint16(authRequest[2:4], uint16(len(password)))
+	copy(authRequest[4:], password)
+	_, err = stream.Write(authRequest)
+	require.NoError(t, err)
+	require.NoError(t, stream.Close())
+}
+
+// rawQUICXEcho opens a CONNECT stream, sends payload and verifies the echo.
+func rawQUICXEcho(t *testing.T, conn *quic.Conn, payload []byte) {
+	t.Helper()
+	stream, err := conn.OpenStream()
+	require.NoError(t, err)
+	defer stream.Close()
+	request := buf.NewSize(2 + quicx.AddressSerializer.AddrPortLen(quicxTestDestination) + len(payload))
+	defer request.Release()
+	request.WriteByte(quicx.Version)
+	request.WriteByte(quicx.CommandConnect)
+	require.NoError(t, quicx.AddressSerializer.WriteAddrPort(request, quicxTestDestination))
+	request.Write(payload)
+	_, err = stream.Write(request.Bytes())
+	require.NoError(t, err)
+	require.NoError(t, stream.SetReadDeadline(time.Now().Add(10*time.Second)))
+	response := make([]byte, len(payload))
+	_, err = io.ReadFull(stream, response)
+	require.NoError(t, err)
+	require.Equal(t, payload, response)
+}
+
+// rawQUICXSendUDPMessage sends a single UDP message frame, optionally as one
+// fragment of a larger message.
+func rawQUICXSendUDPMessage(t *testing.T, conn *quic.Conn, sessionID uint16, packetID uint16, fragmentTotal uint8, fragmentID uint8, data []byte) {
+	t.Helper()
+	destination := M.ParseSocksaddrHostPort("127.0.0.1", 53)
+	message := buf.NewSize(2 + 10 + quicx.AddressSerializer.AddrPortLen(destination) + len(data))
+	defer message.Release()
+	message.WriteByte(quicx.Version)
+	message.WriteByte(quicx.CommandPacket)
+	_ = binary.Write(message, binary.BigEndian, sessionID)
+	_ = binary.Write(message, binary.BigEndian, packetID)
+	message.WriteByte(fragmentTotal)
+	message.WriteByte(fragmentID)
+	_ = binary.Write(message, binary.BigEndian, uint16(len(data)))
+	require.NoError(t, quicx.AddressSerializer.WriteAddrPort(message, destination))
+	message.Write(data)
+	require.NoError(t, conn.SendDatagram(message.Bytes()))
+}
+
 type quicxTestDialer struct{}
 
 func (d *quicxTestDialer) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
@@ -164,18 +597,74 @@ func (d *quicxTestDialer) ListenPacket(ctx context.Context, destination M.Socksa
 	return net.ListenPacket("udp", "")
 }
 
-type quicxTestHandler struct{}
+// quicxTestEchoHandler serves the requests of the tests: TCP streams are echoed
+// back and UDP packets are sent back to their source. It records the
+// authenticated user of every accepted connection.
+type quicxTestEchoHandler struct {
+	access         sync.Mutex
+	users          []int
+	udpPackets     atomic.Int64
+	udpWriteErrors atomic.Int64
+}
 
-func (quicxTestHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+func (h *quicxTestEchoHandler) recordUser(ctx context.Context) {
+	userID, _ := auth.UserFromContext[int](ctx)
+	h.access.Lock()
+	h.users = append(h.users, userID)
+	h.access.Unlock()
+}
+
+func (h *quicxTestEchoHandler) userList() []int {
+	h.access.Lock()
+	defer h.access.Unlock()
+	return append([]int{}, h.users...)
+}
+
+func (h *quicxTestEchoHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+	h.recordUser(ctx)
 	go func() {
-		defer onClose(nil)
-		_, _ = io.Copy(io.Discard, conn)
+		defer closeQUICXTestConnection(conn, onClose)
+		buffer := make([]byte, 4096)
+		for {
+			n, err := conn.Read(buffer)
+			if n > 0 {
+				if _, err = conn.Write(buffer[:n]); err != nil {
+					return
+				}
+			}
+			if err != nil {
+				return
+			}
+		}
 	}()
 }
 
-func (quicxTestHandler) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+func (h *quicxTestEchoHandler) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+	h.recordUser(ctx)
 	go func() {
-		defer onClose(nil)
-		<-ctx.Done()
+		defer closeQUICXTestConnection(conn, onClose)
+		for {
+			buffer := buf.New()
+			packetDestination, err := conn.ReadPacket(buffer)
+			if err != nil {
+				buffer.Release()
+				return
+			}
+			h.udpPackets.Add(1)
+			// WritePacket takes ownership of the buffer.
+			if err = conn.WritePacket(buffer, packetDestination); err != nil {
+				h.udpWriteErrors.Add(1)
+				return
+			}
+		}
 	}()
+}
+
+// closeQUICXTestConnection closes the connection of a test handler. The QUICX
+// service passes a nil callback when it serves the connection itself.
+func closeQUICXTestConnection(conn io.Closer, onClose N.CloseHandlerFunc) {
+	if onClose != nil {
+		onClose(nil)
+	}
+	conn.Close()
 }
