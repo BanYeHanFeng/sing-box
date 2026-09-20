@@ -81,6 +81,26 @@ TLS configuration, see [TLS](/configuration/shared/tls/#inbound).
 
 The ALPN must be `h3`.
 
+### 0-RTT and replay
+
+The server accepts 0-RTT data so that the transport layer stays
+indistinguishable from a standard HTTP/3 server. As QUIC 0-RTT has no replay
+protection of its own, the client attaches a random, per-connection nonce to
+its authentication request and the server remembers the nonces of authenticated
+sessions:
+
+- Another session presenting the same nonce is treated as a replayed 0-RTT
+  flight: it is terminated following `auth_failure_policy`, so no connection to
+  the destination is established.
+- A session presenting its own nonce again (a client racing two authentication
+  streams, or resending its authentication after a rejected 0-RTT attempt) is
+  not a replay.
+
+The server remembers the nonces of the last 65536 authenticated sessions for at
+most 24 hours, after which a replay is no longer guaranteed to be rejected. The
+state lives in the process: a deployment with several instances, or a restart,
+resets the window.
+
 ### QUIC Fields
 
 See [QUIC Fields](/configuration/shared/quic/) for details.

@@ -75,18 +75,31 @@ The ALPN must be `h3`.
 
 QUICX attempts a 0-RTT connection handshake whenever a session ticket from a
 previous connection is available, saving one round trip when the tunnel is
-re-established. As the protocol is fully multiplexed this is not impacting much
-on the performance.
+re-established. As the protocol is fully multiplexed only the first request
+after the re-establishment benefits from it, and that request is what the
+client's 0-RTT data carries: the authentication request, the CONNECT request
+(the destination) and the first payload of the proxied connection are all sent
+in the first flight.
 
 When the server rejects the attempt (for example after a restart, a session
 ticket key change, or an anti-replay rejection), the client resends the
 authentication and the first request after the handshake completes instead of
 closing the connection.
 
+The client attaches a random nonce to the authentication request of every
+connection, and the server remembers the nonces of authenticated sessions and
+rejects a nonce another session already used (see 0-RTT and replay in the
+inbound documentation). A replayed 0-RTT flight therefore fails authentication
+and never establishes a connection to the destination.
+
 !!! warning ""
-    0-RTT data is vulnerable to replay attacks, which matters for non-idempotent
-    requests. The server only accepts it because the transport is indistinguishable
-    from a standard HTTP/3 server.
+    0-RTT data is vulnerable to replay attacks: whoever captured a client's 0-RTT
+    flight can send it to the server again, and the transport cannot tell the copy
+    from the original. The attacker does not get a usable tunnel out of it (he has
+    no handshake keys, cannot decrypt responses and cannot construct 1-RTT data),
+    but without the nonce check above the server would authenticate again, connect
+    to the destination again and deliver the first payload a second time, which
+    matters for non-idempotent requests (a plaintext HTTP POST, for example).
 
 ### QUIC Fields
 
