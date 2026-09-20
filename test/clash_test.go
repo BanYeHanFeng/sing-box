@@ -411,17 +411,20 @@ func testLargeDataWithPacketConnSize(t *testing.T, port uint16, chunkSize int, p
 		buf := make([]byte, 64*1024)
 
 		for i := 0; i < times; i++ {
-			_, rAddr, err = l.ReadFrom(buf)
-			if err != nil {
-				t.Log(err.Error())
+			// The error is scoped to this goroutine: assigning the shared
+			// function level err here races with the caller.
+			var readErr error
+			_, rAddr, readErr = l.ReadFrom(buf)
+			if readErr != nil {
+				t.Log(readErr.Error())
 				return
 			}
 			hash := md5.Sum(buf[:chunkSize])
 			hashMap[int(buf[0])] = hash[:]
 		}
-		sendHash, err := writeRandData(l, rAddr)
-		if err != nil {
-			t.Log(err.Error())
+		sendHash, writeErr := writeRandData(l, rAddr)
+		if writeErr != nil {
+			t.Log(writeErr.Error())
 			return
 		}
 
@@ -438,9 +441,9 @@ func testLargeDataWithPacketConnSize(t *testing.T, port uint16, chunkSize int, p
 	defer pc.Close()
 
 	go func() {
-		sendHash, err := writeRandData(pc, rAddr)
-		if err != nil {
-			t.Log(err.Error())
+		sendHash, writeErr := writeRandData(pc, rAddr)
+		if writeErr != nil {
+			t.Log(writeErr.Error())
 			return
 		}
 
