@@ -80,6 +80,30 @@ jobs:
           esac
           echo "release_target=${RELEASE_TARGET}" >> "$GITHUB_OUTPUT"
 
+  test_quicx:
+    name: QUICX 测试
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+      - name: 配置 Go 环境
+        uses: actions/setup-go@v7
+        with:
+          go-version: 1.26.5
+          cache: false
+      - name: 缓存 Go 模块
+        uses: actions/cache@v6
+        with:
+          path: ~/go/pkg/mod
+          key: go-mod-${{ runner.os }}-go1.26.5-quicx-${{ hashFiles('go.sum', 'test/go.sum') }}
+          restore-keys: go-mod-${{ runner.os }}-go1.26.5-
+      - name: 检出 fork 依赖
+        run: bash .github/scripts/setup-fork-deps.sh
+      - name: QUICX 自测与回归测试
+        run: go test -race -tags with_quic -count=1 -v -run 'TestQUICX' ./test/...
+
   build_linux:
     name: 构建 Linux (${{ matrix.arch }})
     needs:

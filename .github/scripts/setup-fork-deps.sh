@@ -31,11 +31,15 @@ git clone --depth=1 -b "${SING_QUIC_REF}" "${SING_QUIC_REPO}" "${PARENT}/sing-qu
 echo "::endgroup::"
 
 echo "::group::生成 go.work"
+# ./test is a separate module holding the integration tests (including the QUICX
+# tests). It references sing-quic and quic-go, so it has to be part of the
+# workspace to be tested against the forks instead of the upstream releases.
 cat > "${WORKSPACE}/go.work" <<EOF
 go 1.25.5
 
 use (
 	.
+	./test
 	../quic-go
 	../sing-quic
 )
