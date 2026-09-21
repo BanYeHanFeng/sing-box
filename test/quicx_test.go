@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -427,11 +428,92 @@ func TestQUICXNormalCloseLogsNoError(t *testing.T) {
 	require.Empty(t, testLogger.errorList(), "a normal close was reported as an error")
 }
 
-// quicxTestLogger records the error level messages of a service.
+
+
+
+// TestQUICXBrokenRequestStreamKeepsSession covers the server half of the
+// reconnect storm: a request stream the server cannot serve must only be reset.
+// Ending the session for it tears down every other connection of the client at
+// once, and the connections re-established while it closes produce more of the
+// same stream.
+func TestQUICXBrokenRequestStreamKeepsSession(t *testing.T) {
+	ctx := context.Background()
+	testLogger := &quicxTestLogger{Logger: logger.NOP()}
+	server := startQUICXTestServerWithLogger(t, ctx, []string{quicxTestPassword}, testLogger, nil)
+	conn := dialRawQUICX(t, ctx, server.address, &quic.Config{EnableDatagrams: true})
+	rawQUICXAuthenticate(t, conn, quicxTestPassword)
+	rawQUICXEcho(t, conn, []byte("ping"))
+
+	// An empty stream which is closed without a request: the abandoned dial of
+	// a client which still opens its streams eagerly.
+	empty, err := conn.OpenStream()
+	require.NoError(t, err)
+	require.NoError(t, empty.Close())
+
+	// A stream which is reset before anything was sent.
+	canceled, err := conn.OpenStream()
+	require.NoError(t, err)
+	canceled.CancelWrite(0)
+	canceled.CancelRead(0)
+
+	// A CONNECT request which the peer truncated.
+	truncated, err := conn.OpenStream()
+	require.NoError(t, err)
+	_, err = truncated.Write([]byte{quicx.Version, quicx.CommandConnect})
+	require.NoError(t, err)
+	require.NoError(t, truncated.Close())
+
+	// A stream which is not a QUICX request at all, on an authenticated session.
+	foreign, err := conn.OpenStream()
+	require.NoError(t, err)
+	_, err = foreign.Write([]byte{0x01, 0x40, 0x64, 0x00, 0x00})
+	require.NoError(t, err)
+	require.NoError(t, foreign.Close())
+
+	time.Sleep(time.Second)
+	t.Logf("server error log after broken request streams: %v", testLogger.errorList())
+	require.Empty(t, testLogger.errorList(), "a broken request stream ended the session")
+	require.False(t, quicxConnectionClosed(conn), "a broken request stream closed the session")
+	// The reset streams are reported, so a recurring headerless stream can be
+	// told apart from a quiet session without another investigation.
+	debugLog := strings.Join(testLogger.debugList(), "\n")
+	require.Contains(t, debugLog, "sent no request", "the streams without a request were not reported")
+	require.Contains(t, debugLog, "is not a QUICX request", "the non-QUICX stream was not reported")
+	require.Contains(t, debugLog, "read request destination", "the truncated CONNECT request was not reported")
+	// The session and its other streams keep working.
+	rawQUICXEcho(t, conn, []byte("pong"))
+	require.Equal(t, []int{0, 0}, server.handler.userList())
+	requireQUICXServiceAlive(t, ctx, server)
+}
+
+// TestQUICXUnauthenticatedStreamFollowsPolicy covers the masquerade which the
+// stream handling must preserve: a bidirectional stream which is not a QUICX
+// request on a session which never authenticated is still terminated following
+// auth_failure_policy, so a probe cannot keep a session alive with it.
+func TestQUICXUnauthenticatedStreamFollowsPolicy(t *testing.T) {
+	ctx := context.Background()
+	server := startQUICXTestServer(t, ctx, []string{quicxTestPassword}, nil)
+	conn := dialRawQUICX(t, ctx, server.address, &quic.Config{EnableDatagrams: true})
+	stream, err := conn.OpenStream()
+	require.NoError(t, err)
+	_, err = stream.Write([]byte{0x01, 0x40, 0x64, 0x00})
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		return quicxConnectionClosed(conn)
+	}, 2*time.Second, 50*time.Millisecond, "an unauthenticated stream was not terminated by policy")
+	require.Empty(t, server.handler.userList(), "an unauthenticated session reached the handler")
+	requireQUICXServiceAlive(t, ctx, server)
+}
+
+// quicxTestLogger records the error level messages of a service. It formats
+// every message exactly like the production logger does, so a message which the
+// logger cannot format (an unsupported argument type panics format.ToString)
+// fails the test instead of the service.
 type quicxTestLogger struct {
 	logger.Logger
 	access sync.Mutex
 	errors []string
+	debugs []string
 }
 
 func (l *quicxTestLogger) Error(args ...any) {
@@ -440,10 +522,22 @@ func (l *quicxTestLogger) Error(args ...any) {
 	l.access.Unlock()
 }
 
+func (l *quicxTestLogger) Debug(args ...any) {
+	l.access.Lock()
+	l.debugs = append(l.debugs, F.ToString(args...))
+	l.access.Unlock()
+}
+
 func (l *quicxTestLogger) errorList() []string {
 	l.access.Lock()
 	defer l.access.Unlock()
 	return append([]string{}, l.errors...)
+}
+
+func (l *quicxTestLogger) debugList() []string {
+	l.access.Lock()
+	defer l.access.Unlock()
+	return append([]string{}, l.debugs...)
 }
 
 func quicxTestTracer(ctx context.Context, isClient bool, connID quic.ConnectionID) qlogwriter.Trace {
@@ -669,6 +763,16 @@ func newQUICXTestClient(t *testing.T, ctx context.Context, serverAddress M.Socks
 	})
 	return client, clientTLS
 }
+
+
+
+
+
+
+
+
+
+
 
 // quicxEchoConn writes payload on conn and verifies that the echo handler sends
 // it back.
