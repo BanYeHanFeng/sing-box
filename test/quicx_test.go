@@ -428,7 +428,117 @@ func TestQUICXNormalCloseLogsNoError(t *testing.T) {
 	require.Empty(t, testLogger.errorList(), "a normal close was reported as an error")
 }
 
+// TestQUICXAbandonedDialKeepsSession covers the client half of the reconnect
+// storm: DialConn used to open the request stream right away, so a connection
+// which was abandoned before its first byte (a canceled dial, a failed handshake
+// report) closed an empty stream. The server cannot tell such a stream from a
+// standard HTTP/3 request and ended the whole session for it, which killed
+// every other connection of the client and made them reconnect into the same
+// state. The stream is created on the first read or write now.
+func TestQUICXAbandonedDialKeepsSession(t *testing.T) {
+	ctx := context.Background()
+	testLogger := &quicxTestLogger{Logger: logger.NOP()}
+	server := startQUICXTestServerWithLogger(t, ctx, []string{quicxTestPassword}, testLogger, nil)
+	dialer := &quicxTestCountingDialer{}
+	client, _ := newQUICXTestClientWithDialer(t, ctx, server.address, quicxTestPassword, dialer, nil)
 
+	healthy, err := client.DialConn(ctx, quicxTestDestination)
+	require.NoError(t, err)
+	quicxEchoConn(t, healthy, []byte("ping"))
+	require.Equal(t, []int{0}, server.handler.userList(), "the first connection was not served")
+	require.Equal(t, int64(1), dialer.dials.Load(), "expected exactly one QUIC connection")
+
+	// The abandoned dial: no byte is ever written and the application closes
+	// the connection.
+	abandoned, err := client.DialConn(ctx, quicxTestDestination)
+	require.NoError(t, err)
+	require.True(t, N.NeedHandshakeForWrite(abandoned), "the connection wrote its request before anything was sent")
+	require.NoError(t, abandoned.Close())
+
+	time.Sleep(time.Second)
+	t.Logf("server error log after an abandoned dial: %v", testLogger.errorList())
+	// The abandoned connection must not have sent a request stream, so the
+	// session must be untouched: the healthy connection keeps working and the
+	// client does not have to redial.
+	require.Empty(t, testLogger.errorList(), "an abandoned dial ended the session")
+	require.Equal(t, []int{0}, server.handler.userList(), "an abandoned dial served a request")
+	quicxEchoConn(t, healthy, []byte("pong"))
+	require.Equal(t, int64(1), dialer.dials.Load(), "the session was replaced after an abandoned dial")
+}
+
+// TestQUICXLazyRequestStream observes the client's streams on the wire with a
+// QUIC endpoint which speaks no protocol at all: an abandoned connection must
+// not open a request stream, the first write must open it with the CONNECT
+// request and its payload, and a reader which never wrote must get the CONNECT
+// request flushed so a server-first protocol can answer.
+func TestQUICXLazyRequestStream(t *testing.T) {
+	ctx := context.Background()
+	endpoint := startQUICXTestRawEndpoint(t, ctx)
+	client, err := quicx.NewClient(quicx.ClientOptions{
+		Context:       ctx,
+		Dialer:        &quicxTestDialer{},
+		ServerAddress: endpoint.address,
+		TLSConfig:     newQUICXTestClientTLS(t, ctx),
+		QUICOptions:   qtls.QUICOptions{},
+		Password:      quicxTestPassword,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		client.CloseWithError(os.ErrClosed)
+	})
+
+	// 1. A connection which is abandoned before its first byte sends nothing at
+	// all, so the first request stream of the session belongs to the connection
+	// which really writes one.
+	abandoned, err := client.DialConn(ctx, quicxTestDestination)
+	require.NoError(t, err)
+	require.True(t, N.NeedHandshakeForWrite(abandoned), "the connection wrote its request before anything was sent")
+	require.NoError(t, abandoned.Close())
+
+	// 2. The first write carries the CONNECT request and the payload on the
+	// first bidirectional stream of the session.
+	payload := []byte("ping")
+	conn, err := client.DialConn(ctx, quicxTestDestination)
+	require.NoError(t, err)
+	_, err = conn.Write(payload)
+	require.NoError(t, err)
+	firstStream := endpoint.acceptStream(t, 10*time.Second)
+	require.Equal(t, quic.StreamID(0), firstStream.StreamID(), "the abandoned dial left a request stream behind")
+	requestPayloadLen := 2 + quicx.AddressSerializer.AddrPortLen(quicxTestDestination)
+	require.Equal(t, quicxTestRequestBytes(t, quicxTestDestination, payload), quicxTestReadStream(t, firstStream, requestPayloadLen+len(payload)))
+
+	// 3. A connection which only reads flushes its CONNECT request before it
+	// waits for the answer, which is what a server-first protocol needs.
+	banner := []byte("banner")
+	serverFirst, err := client.DialConn(ctx, quicxTestDestination)
+	require.NoError(t, err)
+	require.NoError(t, serverFirst.SetReadDeadline(time.Now().Add(10*time.Second)))
+	bannerResult := make(chan []byte, 1)
+	bannerError := make(chan error, 1)
+	go func() {
+		buffer := make([]byte, len(banner))
+		_, readErr := io.ReadFull(serverFirst, buffer)
+		if readErr != nil {
+			bannerError <- readErr
+			return
+		}
+		bannerResult <- buffer
+	}()
+	secondStream := endpoint.acceptStream(t, 10*time.Second)
+	require.Equal(t, quic.StreamID(4), secondStream.StreamID())
+	requestLen := 2 + quicx.AddressSerializer.AddrPortLen(quicxTestDestination)
+	require.Equal(t, quicxTestRequestBytes(t, quicxTestDestination, nil), quicxTestReadStream(t, secondStream, requestLen))
+	_, err = secondStream.Write(banner)
+	require.NoError(t, err)
+	select {
+	case readErr := <-bannerError:
+		require.NoError(t, readErr, "the flushed request was not answered")
+	case received := <-bannerResult:
+		require.Equal(t, banner, received)
+	case <-time.After(10 * time.Second):
+		require.Fail(t, "the reader was never answered")
+	}
+}
 
 
 // TestQUICXBrokenRequestStreamKeepsSession covers the server half of the
@@ -747,10 +857,15 @@ func newQUICXTestClientTLS(t *testing.T, ctx context.Context) boxTLS.Config {
 
 func newQUICXTestClient(t *testing.T, ctx context.Context, serverAddress M.Socksaddr, password string, tracer func(ctx context.Context, isClient bool, connID quic.ConnectionID) qlogwriter.Trace) (*quicx.Client, boxTLS.Config) {
 	t.Helper()
+	return newQUICXTestClientWithDialer(t, ctx, serverAddress, password, &quicxTestDialer{}, tracer)
+}
+
+func newQUICXTestClientWithDialer(t *testing.T, ctx context.Context, serverAddress M.Socksaddr, password string, dialer N.Dialer, tracer func(ctx context.Context, isClient bool, connID quic.ConnectionID) qlogwriter.Trace) (*quicx.Client, boxTLS.Config) {
+	t.Helper()
 	clientTLS := newQUICXTestClientTLS(t, ctx)
 	client, err := quicx.NewClient(quicx.ClientOptions{
 		Context:       ctx,
-		Dialer:        &quicxTestDialer{},
+		Dialer:        dialer,
 		ServerAddress: serverAddress,
 		TLSConfig:     clientTLS,
 		QUICOptions:   qtls.QUICOptions{},
@@ -764,15 +879,121 @@ func newQUICXTestClient(t *testing.T, ctx context.Context, serverAddress M.Socks
 	return client, clientTLS
 }
 
+// quicxTestRequestBytes builds the CONNECT request a client sends for
+// destination, with payload as its first data.
+func quicxTestRequestBytes(t *testing.T, destination M.Socksaddr, payload []byte) []byte {
+	t.Helper()
+	request := buf.NewSize(2 + quicx.AddressSerializer.AddrPortLen(destination) + len(payload))
+	defer request.Release()
+	request.WriteByte(quicx.Version)
+	request.WriteByte(quicx.CommandConnect)
+	require.NoError(t, quicx.AddressSerializer.WriteAddrPort(request, destination))
+	request.Write(payload)
+	return append([]byte{}, request.Bytes()...)
+}
 
+// quicxTestReadStream reads exactly length bytes of a request stream.
+func quicxTestReadStream(t *testing.T, stream *quic.Stream, length int) []byte {
+	t.Helper()
+	require.NoError(t, stream.SetReadDeadline(time.Now().Add(10*time.Second)))
+	request := make([]byte, length)
+	_, err := io.ReadFull(stream, request)
+	require.NoError(t, err)
+	return request
+}
 
+// quicxTestRawEndpoint is a QUIC endpoint which speaks no protocol at all: it
+// hands every request stream a client opens to a test, which is how the client's
+// streams are observed on the wire.
+type quicxTestRawEndpoint struct {
+	address M.Socksaddr
+	streams chan *quic.Stream
+}
 
+func startQUICXTestRawEndpoint(t *testing.T, ctx context.Context) *quicxTestRawEndpoint {
+	t.Helper()
+	return startQUICXTestRawEndpointWithWindow(t, ctx, 0)
+}
 
+// startQUICXTestRawEndpointWithWindow starts the endpoint with a fixed stream
+// receive window. A small window makes a client write which is larger than the
+// window block until the test reads it.
+func startQUICXTestRawEndpointWithWindow(t *testing.T, ctx context.Context, streamWindow uint64) *quicxTestRawEndpoint {
+	t.Helper()
+	_, certPem, keyPem := createSelfSignedCertificate(t, "example.org")
+	serverTLS, err := boxTLS.NewServer(ctx, logger.NOP(), option.InboundTLSOptions{
+		Enabled:         true,
+		CertificatePath: certPem,
+		KeyPath:         keyPem,
+		ALPN:            []string{"h3"},
+	})
+	require.NoError(t, err)
+	quicConfig := &quic.Config{
+		EnableDatagrams:    true,
+		MaxIncomingStreams: 1 << 20,
+	}
+	if streamWindow > 0 {
+		quicConfig.InitialStreamReceiveWindow = streamWindow
+		quicConfig.MaxStreamReceiveWindow = streamWindow
+	}
+	packetConn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	listener, err := qtls.ListenEarlyWithOptions(packetConn, serverTLS, quicConfig, qtls.ListenOptions{})
+	require.NoError(t, err)
+	endpoint := &quicxTestRawEndpoint{
+		address: M.SocksaddrFromNet(packetConn.LocalAddr()),
+		streams: make(chan *quic.Stream, 32),
+	}
+	go func() {
+		for {
+			conn, acceptErr := listener.Accept(ctx)
+			if acceptErr != nil {
+				return
+			}
+			go func(conn *quic.Conn) {
+				for {
+					stream, streamErr := conn.AcceptStream(ctx)
+					if streamErr != nil {
+						return
+					}
+					endpoint.streams <- stream
+				}
+			}(conn)
+		}
+	}()
+	t.Cleanup(func() {
+		listener.Close()
+		packetConn.Close()
+	})
+	return endpoint
+}
 
+// acceptStream returns the next request stream the client opened.
+func (e *quicxTestRawEndpoint) acceptStream(t *testing.T, timeout time.Duration) *quic.Stream {
+	t.Helper()
+	select {
+	case stream := <-e.streams:
+		return stream
+	case <-time.After(timeout):
+		require.FailNow(t, "the client did not open a request stream")
+		return nil
+	}
+}
 
+// quicxTestCountingDialer counts the QUIC connections a client opens, which is
+// how a test observes that a session was replaced instead of kept.
+type quicxTestCountingDialer struct {
+	dials atomic.Int64
+}
 
+func (d *quicxTestCountingDialer) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	d.dials.Add(1)
+	return (&net.Dialer{}).DialContext(ctx, "udp", destination.String())
+}
 
-
+func (d *quicxTestCountingDialer) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+	return net.ListenPacket("udp", "")
+}
 
 // quicxEchoConn writes payload on conn and verifies that the echo handler sends
 // it back.
