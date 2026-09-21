@@ -540,6 +540,62 @@ func TestQUICXLazyRequestStream(t *testing.T) {
 	}
 }
 
+// TestQUICXStreamWriteFailureKeepsSession covers the other half of the client
+// fix: a request stream which cannot be written used to close the whole QUIC
+// connection, which tore down every other connection multiplexed on it. The
+// peer stops reading the stream (STOP_SENDING) while the first write is blocked
+// on the stream's flow control window, which makes that write fail.
+func TestQUICXStreamWriteFailureKeepsSession(t *testing.T) {
+	ctx := context.Background()
+	endpoint := startQUICXTestRawEndpointWithWindow(t, ctx, 16<<10)
+	dialer := &quicxTestCountingDialer{}
+	client, err := quicx.NewClient(quicx.ClientOptions{
+		Context:       ctx,
+		Dialer:        dialer,
+		ServerAddress: endpoint.address,
+		TLSConfig:     newQUICXTestClientTLS(t, ctx),
+		QUICOptions:   qtls.QUICOptions{},
+		Password:      quicxTestPassword,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		client.CloseWithError(os.ErrClosed)
+	})
+
+	// The write is larger than the whole stream window of the peer, so it can
+	// only complete if the peer reads it.
+	conn, err := client.DialConn(ctx, quicxTestDestination)
+	require.NoError(t, err)
+	writeResult := make(chan error, 1)
+	go func() {
+		_, writeErr := conn.Write(bytes.Repeat([]byte{0x42}, 1<<20))
+		writeResult <- writeErr
+	}()
+	failedStream := endpoint.acceptStream(t, 10*time.Second)
+	failedStream.CancelRead(0)
+	failedStream.CancelWrite(0)
+	select {
+	case writeErr := <-writeResult:
+		require.Error(t, writeErr, "a write the peer stopped reading succeeded")
+	case <-time.After(10 * time.Second):
+		require.Fail(t, "the write did not fail after the peer stopped reading")
+	}
+
+	// A failed stream must not end the session: the client keeps its QUIC
+	// connection and the next request is served on it, which means the next
+	// stream is a later one of the same session and no redial happened.
+	again, err := client.DialConn(ctx, quicxTestDestination)
+	require.NoError(t, err)
+	_, err = again.Write([]byte("ping"))
+	require.NoError(t, err)
+	nextStream := endpoint.acceptStream(t, 10*time.Second)
+	require.Equal(t, quic.StreamID(4), nextStream.StreamID(), "the session was replaced after one failed stream")
+	require.Equal(t, int64(1), dialer.dials.Load(), "the session was replaced after one failed stream")
+	require.Equal(t,
+		quicxTestRequestBytes(t, quicxTestDestination, []byte("ping")),
+		quicxTestReadStream(t, nextStream, 2+quicx.AddressSerializer.AddrPortLen(quicxTestDestination)+4),
+	)
+}
 
 // TestQUICXBrokenRequestStreamKeepsSession covers the server half of the
 // reconnect storm: a request stream the server cannot serve must only be reset.
