@@ -342,6 +342,40 @@ func quicxConnectionClosed(conn *quic.Conn) bool {
 	}
 }
 
+// TestQUICXEmptyTargetUDPFragment covers the sessions which are created from the
+// first DATAGRAM of a fragmented UDP message: fragments used to carry the
+// destination in the head fragment only, and the routing decision of a session
+// is made once, from its first message, so a tail fragment which arrived first
+// created a session routed to an empty destination (":0"). Such a message is
+// dropped without a session now, and the session of a message whose tail
+// fragment arrived first is routed to the destination of the message.
+func TestQUICXEmptyTargetUDPFragment(t *testing.T) {
+	ctx := context.Background()
+	server := startQUICXTestServer(t, ctx, []string{quicxTestPassword}, nil)
+	conn := dialRawQUICX(t, ctx, server.address, &quic.Config{EnableDatagrams: true})
+	rawQUICXAuthenticate(t, conn, quicxTestPassword)
+
+	// The tail fragment of a message of the protocol before the destination was
+	// repeated in every fragment: it carries none, so this sessionID must not
+	// get a session at all — a session created here would be routed (and
+	// reported, and dialed) to ":0".
+	rawQUICXSendUDPMessageTo(t, conn, 1, 1, 2, 1, M.Socksaddr{}, []byte("tail"))
+	time.Sleep(500 * time.Millisecond)
+	require.Empty(t, server.handler.packetTargetList(), "a message without a destination created a session")
+	require.False(t, quicxConnectionClosed(conn), "a message without a destination ended the session")
+
+	// The same message with the destination every fragment carries: the tail
+	// fragment arrives first, and the session has to be routed to the
+	// destination of the message instead of an empty address.
+	rawQUICXSendUDPMessageTo(t, conn, 2, 2, 2, 1, quicxTestDestination, []byte("tail"))
+	rawQUICXSendUDPMessageTo(t, conn, 2, 2, 2, 0, quicxTestDestination, []byte("head"))
+	require.Eventually(t, func() bool {
+		return server.handler.udpPackets.Load() >= 1
+	}, 5*time.Second, 50*time.Millisecond, "the fragmented UDP message was not delivered")
+	require.Equal(t, []M.Socksaddr{quicxTestDestination}, server.handler.packetTargetList(), "the session was not routed to the destination of its first message")
+	requireQUICXServiceAlive(t, ctx, server)
+}
+
 // TestQUICXWrongPassword covers the authentication failure path: a session which
 // cannot authenticate must not serve any request, must not crash the service and
 // must not be reported as authenticated.
@@ -1153,7 +1187,15 @@ func rawQUICXEcho(t *testing.T, conn *quic.Conn, payload []byte) {
 // fragment of a larger message.
 func rawQUICXSendUDPMessage(t *testing.T, conn *quic.Conn, sessionID uint16, packetID uint16, fragmentTotal uint8, fragmentID uint8, data []byte) {
 	t.Helper()
-	destination := M.ParseSocksaddrHostPort("127.0.0.1", 53)
+	rawQUICXSendUDPMessageTo(t, conn, sessionID, packetID, fragmentTotal, fragmentID, M.ParseSocksaddrHostPort("127.0.0.1", 53), data)
+}
+
+// rawQUICXSendUDPMessageTo sends a single UDP message frame with an explicit
+// destination, which a test uses to send a message without one, as the tail
+// fragments of the protocol before the destination was repeated in every
+// fragment looked on the wire.
+func rawQUICXSendUDPMessageTo(t *testing.T, conn *quic.Conn, sessionID uint16, packetID uint16, fragmentTotal uint8, fragmentID uint8, destination M.Socksaddr, data []byte) {
+	t.Helper()
 	message := buf.NewSize(2 + 10 + quicx.AddressSerializer.AddrPortLen(destination) + len(data))
 	defer message.Release()
 	message.WriteByte(quicx.Version)
@@ -1216,10 +1258,12 @@ func (c *quicxTestGatePacketConn) WriteTo(p []byte, addr net.Addr) (int, error) 
 
 // quicxTestEchoHandler serves the requests of the tests: TCP streams are echoed
 // back and UDP packets are sent back to their source. It records the
-// authenticated user of every accepted connection.
+// authenticated user and the destination of every accepted connection, which is
+// the destination the service routed (and created) its session with.
 type quicxTestEchoHandler struct {
 	access         sync.Mutex
 	users          []int
+	packetTargets  []M.Socksaddr
 	udpPackets     atomic.Int64
 	udpWriteErrors atomic.Int64
 }
@@ -1235,6 +1279,18 @@ func (h *quicxTestEchoHandler) userList() []int {
 	h.access.Lock()
 	defer h.access.Unlock()
 	return append([]int{}, h.users...)
+}
+
+func (h *quicxTestEchoHandler) recordPacketTarget(destination M.Socksaddr) {
+	h.access.Lock()
+	h.packetTargets = append(h.packetTargets, destination)
+	h.access.Unlock()
+}
+
+func (h *quicxTestEchoHandler) packetTargetList() []M.Socksaddr {
+	h.access.Lock()
+	defer h.access.Unlock()
+	return append([]M.Socksaddr{}, h.packetTargets...)
 }
 
 func (h *quicxTestEchoHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
@@ -1258,6 +1314,7 @@ func (h *quicxTestEchoHandler) NewConnectionEx(ctx context.Context, conn net.Con
 
 func (h *quicxTestEchoHandler) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
 	h.recordUser(ctx)
+	h.recordPacketTarget(destination)
 	go func() {
 		defer closeQUICXTestConnection(conn, onClose)
 		for {
