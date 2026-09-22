@@ -376,6 +376,45 @@ func TestQUICXEmptyTargetUDPFragment(t *testing.T) {
 	requireQUICXServiceAlive(t, ctx, server)
 }
 
+// TestQUICXConnectionCloseCancelsPendingStreams covers a session which never
+// authenticated: its request stream waits for the authentication of the session,
+// and nothing else watches the QUIC connection in that state (the datagram and
+// the heartbeat loops wait for authentication first, and the accept loops just
+// return), so a connection which ended by itself — an idle timeout, a stateless
+// reset or a peer close — used to be noticed only when the authentication
+// timeout expired. The pending stream was then released with "authentication
+// timeout" around authTimeout (3 seconds in the test service) later, and the
+// close of the connection was reported as an ERROR.
+func TestQUICXConnectionCloseCancelsPendingStreams(t *testing.T) {
+	ctx := context.Background()
+	testLogger := &quicxTestLogger{Logger: logger.NOP()}
+	server := startQUICXTestServerWithLogger(t, ctx, []string{quicxTestPassword}, testLogger, nil)
+	conn := dialRawQUICX(t, ctx, server.address, &quic.Config{EnableDatagrams: true})
+	stream, err := conn.OpenStream()
+	require.NoError(t, err)
+	_, err = stream.Write(quicxTestRequestBytes(t, quicxTestDestination, []byte("ping")))
+	require.NoError(t, err)
+
+	// The server reads the request and waits for the authentication of the
+	// session, which never comes.
+	time.Sleep(300 * time.Millisecond)
+	require.Empty(t, server.handler.userList(), "an unauthenticated session reached the handler")
+	require.NoError(t, conn.CloseWithError(0, ""))
+
+	// The pending stream is released with the real cause of the session end,
+	// well before the authentication timeout of the service.
+	require.Eventually(t, func() bool {
+		return strings.Contains(strings.Join(testLogger.debugList(), "\n"), "handle stream request")
+	}, 2*time.Second, 20*time.Millisecond, "the pending request stream was not released when the connection closed")
+
+	// Waiting past the authentication timeout must not report the session: the
+	// connection was closed, which is not an error of the service.
+	time.Sleep(3 * time.Second)
+	require.Empty(t, testLogger.errorList(), "the closed connection was reported as an error")
+	require.Empty(t, server.handler.userList(), "an unauthenticated session reached the handler")
+	requireQUICXServiceAlive(t, ctx, server)
+}
+
 // TestQUICXWrongPassword covers the authentication failure path: a session which
 // cannot authenticate must not serve any request, must not crash the service and
 // must not be reported as authenticated.
