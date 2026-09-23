@@ -11,6 +11,7 @@ type QUICXInboundOptions struct {
 	Heartbeat         badoption.Duration `json:"heartbeat,omitempty"`
 	AuthFailurePolicy string             `json:"auth_failure_policy,omitempty" enum:"h3_close,silent_drop"`
 	BBRProfile        string             `json:"bbr_profile,omitempty" enum:"standard,conservative,aggressive"`
+	QLOGDirectory     string             `json:"qlog_directory,omitempty"`
 	InboundTLSOptionsContainer
 	QUICOptions
 }
@@ -23,10 +24,11 @@ type QUICXUser struct {
 type QUICXOutboundOptions struct {
 	DialerOptions
 	ServerOptions
-	Password   string             `json:"password,omitempty"`
-	Heartbeat  badoption.Duration `json:"heartbeat,omitempty"`
-	BBRProfile string             `json:"bbr_profile,omitempty" enum:"standard,conservative,aggressive"`
-	Network    NetworkList        `json:"network,omitempty"`
+	Password      string             `json:"password,omitempty"`
+	Heartbeat     badoption.Duration `json:"heartbeat,omitempty"`
+	BBRProfile    string             `json:"bbr_profile,omitempty" enum:"standard,conservative,aggressive"`
+	QLOGDirectory string             `json:"qlog_directory,omitempty"`
+	Network       NetworkList        `json:"network,omitempty"`
 	OutboundTLSOptionsContainer
 	QUICOptions
 }

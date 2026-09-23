@@ -61,6 +61,13 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 	} else {
 		udpTimeout = C.UDPTimeout
 	}
+	var tracer qlogTracer
+	if options.QLOGDirectory != "" {
+		tracer, err = newQLOGTracer(logger, options.QLOGDirectory)
+		if err != nil {
+			return nil, err
+		}
+	}
 	service, err := quicx.NewService[int](quicx.ServiceOptions{
 		Context:   ctx,
 		Logger:    logger,
@@ -80,6 +87,7 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 		Handler:           inbound,
 		AuthFailurePolicy: options.AuthFailurePolicy,
 		BBRProfile:        options.BBRProfile,
+		Tracer:            tracer,
 	})
 	if err != nil {
 		return nil, err

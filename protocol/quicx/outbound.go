@@ -48,6 +48,13 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 	if err != nil {
 		return nil, err
 	}
+	var tracer qlogTracer
+	if options.QLOGDirectory != "" {
+		tracer, err = newQLOGTracer(logger, options.QLOGDirectory)
+		if err != nil {
+			return nil, err
+		}
+	}
 	client, err := quicx.NewClient(quicx.ClientOptions{
 		Context:       ctx,
 		Dialer:        outboundDialer,
@@ -65,6 +72,7 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 		Password:   options.Password,
 		Heartbeat:  time.Duration(options.Heartbeat),
 		BBRProfile: options.BBRProfile,
+		Tracer:     tracer,
 	})
 	if err != nil {
 		return nil, err
