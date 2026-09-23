@@ -17,6 +17,7 @@
   "heartbeat": "10s",
   "auth_failure_policy": "h3_close",
   "bbr_profile": "",
+  "qlog_directory": "",
   "tls": {
     "enabled": true,
     "certificate_path": "/path/to/certificate.crt",
@@ -72,6 +73,22 @@ How the server handles quicx authentication failures and standard HTTP/3 request
 BBR congestion control algorithm profile, one of `conservative` `standard` `aggressive`.
 
 `standard` is used by default.
+
+#### qlog_directory
+
+Write a [qlog](https://datatracker.ietf.org/doc/draft-ietf-quic-qlog-main-schema/)
+trace for every QUIC connection into this directory, named
+`<connection id>_server.sqlog`.
+
+Disabled by default. The directory is created at startup, and a path that
+cannot be written makes sing-box fail to start instead of tracing nothing.
+
+!!! note ""
+    Every connection gets its own file and nothing prunes the directory, so it
+    only grows. Enable this while debugging a specific problem, not for
+    permanent operation.
+
+The traces can be opened with [qvis](https://qvis.quictools.info/).
 
 #### tls
 

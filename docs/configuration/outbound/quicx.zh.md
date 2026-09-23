@@ -10,6 +10,7 @@
   "password": "hello",
   "heartbeat": "10s",
   "bbr_profile": "",
+  "qlog_directory": "",
   "network": "tcp",
   "tls": {
     "enabled": true,
@@ -54,6 +55,17 @@ QUICX 用户密码
 BBR 拥塞控制算法配置，可选 `conservative` `standard` `aggressive`。
 
 默认使用 `standard`。
+
+#### qlog_directory
+
+为每个 QUIC 连接向该目录写入一份 [qlog](https://datatracker.ietf.org/doc/draft-ietf-quic-qlog-main-schema/) 日志，文件名为 `<连接 ID>_client.sqlog`。
+
+默认关闭。目录会在启动时创建，路径不可写会导致 sing-box 启动失败，而不是静默地不记录日志。
+
+!!! note ""
+    每个连接都会生成独立文件，且没有任何清理机制，目录只会不断增长，因此只建议在排查具体问题时开启。
+
+日志可用 [qvis](https://qvis.quictools.info/) 打开分析。
 
 #### network
 
