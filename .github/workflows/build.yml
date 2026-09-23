@@ -296,8 +296,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      id-token: write
-      attestations: write
       artifact-metadata: write
     steps:
       - name: 检出代码
@@ -310,10 +308,6 @@ jobs:
           pattern: binary-*
           path: dist
           merge-multiple: true
-      - name: 为构建产物生成溯源证明
-        uses: actions/attest@v4
-        with:
-          subject-path: 'dist/**'
       - name: 发布构建结果
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
