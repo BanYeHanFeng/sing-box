@@ -7409,6 +7409,9 @@
                 "aggressive"
               ]
             },
+            "qlog_directory": {
+              "type": "string"
+            },
             "tls": {
               "$ref": "#/$defs/InboundTLSOptions"
             },
@@ -13324,6 +13327,9 @@
                 "conservative",
                 "aggressive"
               ]
+            },
+            "qlog_directory": {
+              "type": "string"
             },
             "network": {
               "anyOf": [
