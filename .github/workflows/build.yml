@@ -365,6 +365,7 @@ jobs:
     permissions:
       actions: write
     needs:
+      - test_quicx
       - build_linux
       - build_android
       - upload
