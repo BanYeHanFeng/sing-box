@@ -72,7 +72,7 @@ QUICX 用户密码
 
 BBR 拥塞控制算法配置，可选 `conservative` `standard` `aggressive`。
 
-默认使用 `standard`。
+默认使用 `conservative`。
 
 #### qlog_directory
 

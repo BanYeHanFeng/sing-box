@@ -72,7 +72,7 @@ How the server handles quicx authentication failures and standard HTTP/3 request
 
 BBR congestion control algorithm profile, one of `conservative` `standard` `aggressive`.
 
-`standard` is used by default.
+`conservative` is used by default.
 
 #### qlog_directory
 
