@@ -215,7 +215,9 @@ func stageWinDivertDriver(architecture string, outputDirectory string) error {
 
 func buildTags(operatingSystem string, architecture string, cgoEnabled bool) ([]string, error) {
 	tagsFile := "release/DEFAULT_BUILD_TAGS"
-	if operatingSystem == "windows" {
+	if operatingSystem == "android" {
+		tagsFile = "release/DEFAULT_BUILD_TAGS_ANDROID"
+	} else if operatingSystem == "windows" {
 		if architecture == "386" {
 			tagsFile = "release/DEFAULT_BUILD_TAGS_OTHERS"
 		} else {
