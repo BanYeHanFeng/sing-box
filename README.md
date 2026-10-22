@@ -4,8 +4,9 @@
 
 ## 相对于上游的主要改动
 **quicx**
+- 部分实现参考 tuic
 - 0rtt 连接恢复
 - 防主动探测
-- 前向校验抗丢包（未来）
+- 前向校验抗丢包
 
 - [入站文档](/docs/configuration/inbound/quicx.zh.md) - [出站文档](/docs/configuration/outbound/quicx.zh.md)
