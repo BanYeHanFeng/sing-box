@@ -8140,6 +8140,9 @@
                 }
               ]
             },
+            "fec": {
+              "$ref": "#/$defs/QUICXFECOptions"
+            },
             "tls": {
               "$ref": "#/$defs/InboundTLSOptions"
             },
@@ -14217,6 +14220,9 @@
                 }
               ]
             },
+            "fec": {
+              "$ref": "#/$defs/QUICXFECOptions"
+            },
             "tls": {
               "$ref": "#/$defs/OutboundTLSOptions"
             },
@@ -18164,6 +18170,33 @@
           "$ref": "#/$defs/Duration"
         },
         "timeout": {
+          "$ref": "#/$defs/Duration"
+        }
+      },
+      "additionalProperties": false
+    },
+    "QUICXFECOptions": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "block": {
+          "type": "boolean"
+        },
+        "block_size": {
+          "type": "integer"
+        },
+        "parity": {
+          "type": "integer"
+        },
+        "max_parity": {
+          "type": "integer"
+        },
+        "interleave": {
+          "type": "integer"
+        },
+        "block_timeout": {
           "$ref": "#/$defs/Duration"
         }
       },

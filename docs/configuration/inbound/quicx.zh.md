@@ -19,6 +19,7 @@
   "bbr_profile": "",
   "qlog_directory": "",
   "qlog_max_size": "",
+  "fec": {},
   "tls": {},
 
   ... // QUIC 字段
@@ -81,6 +82,38 @@ BBR 拥塞控制算法配置，可选 `conservative` `standard` `aggressive`。
 qlog 目录的总大小上限，单位：MB。
 
 默认使用 `300MB`。
+
+#### fec
+
+UDP 转发的前向纠错配置，默认关闭。
+
+```json
+{
+  "fec": {
+    "enabled": true,
+    "block": true,
+    "block_size": 10,
+    "parity": 2,
+    "max_parity": 4,
+    "interleave": 4,
+    "block_timeout": "10ms"
+  }
+}
+```
+
+`enabled` 需要连接两端同时启用；只有客户端与服务端都支持时才会生效，其余情况保持原有行为。
+
+`block` 启用跨消息块纠删码，关闭时只使用消息内单校验：一条被拆成多个分片的 UDP 消息会额外发送一个 XOR 校验分片，可恢复任意一个丢失分片，且没有额外延迟。
+
+`block_size` 是每个纠删码块包含的消息数量，默认 `10`，上限 `32`。
+
+`parity` 是初始冗余分片数量，默认 `2`。
+
+`max_parity` 是自适应冗余的上限，默认 `4`，上限 `8`。
+
+`interleave` 是块交错深度，默认 `4`。同一个块的消息按该深度分散到不同发送时刻，用于抵抗连续丢包。
+
+`block_timeout` 是块关闭前等待的最长时间，默认 `10ms`。较小的值降低修复时延，较大的值减少尾部浪费。
 
 #### tls
 
