@@ -14,6 +14,7 @@ type QUICXInboundOptions struct {
 	BBRProfile        string                   `json:"bbr_profile,omitempty" enum:"standard,conservative,aggressive"`
 	QLOGDirectory     string                   `json:"qlog_directory,omitempty"`
 	QLOGMaxSize       *byteformats.MemoryBytes `json:"qlog_max_size,omitempty"`
+	FEC               QUICXFECOptions          `json:"fec,omitempty"`
 	InboundTLSOptionsContainer
 	QUICOptions
 }
@@ -32,6 +33,17 @@ type QUICXOutboundOptions struct {
 	QLOGDirectory string                   `json:"qlog_directory,omitempty"`
 	QLOGMaxSize   *byteformats.MemoryBytes `json:"qlog_max_size,omitempty"`
 	Network       NetworkList              `json:"network,omitempty"`
+	FEC           QUICXFECOptions          `json:"fec,omitempty"`
 	OutboundTLSOptionsContainer
 	QUICOptions
+}
+
+type QUICXFECOptions struct {
+	Enabled      bool               `json:"enabled,omitempty"`
+	Block        bool               `json:"block,omitempty"`
+	BlockSize    int                `json:"block_size,omitempty"`
+	Parity       int                `json:"parity,omitempty"`
+	MaxParity    int                `json:"max_parity,omitempty"`
+	Interleave   int                `json:"interleave,omitempty"`
+	BlockTimeout badoption.Duration `json:"block_timeout,omitempty"`
 }

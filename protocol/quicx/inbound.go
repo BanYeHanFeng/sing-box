@@ -88,6 +88,7 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 		AuthTimeout:       time.Duration(options.AuthTimeout),
 		Heartbeat:         time.Duration(options.Heartbeat),
 		UDPTimeout:        udpTimeout,
+		FEC:               buildFECOptions(options.FEC),
 		Handler:           inbound,
 		AuthFailurePolicy: options.AuthFailurePolicy,
 		BBRProfile:        options.BBRProfile,
