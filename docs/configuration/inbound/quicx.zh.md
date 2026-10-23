@@ -18,7 +18,7 @@
   "auth_failure_policy": "",
   "bbr_profile": "",
   "qlog_directory": "",
-  "qlog_max_size": "",
+  "qlog_max_size": 300,
   "fec": {},
   "tls": {},
 
@@ -79,9 +79,9 @@ BBR 拥塞控制算法配置，可选 `conservative` `standard` `aggressive`。
 
 #### qlog_max_size
 
-qlog 目录的总大小上限，单位：MB。
+qlog 目录的总大小上限，单位为 MB。
 
-默认使用 `300MB`。
+默认使用 `300`。
 
 #### fec
 
