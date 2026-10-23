@@ -23,6 +23,12 @@ import (
 // configuration does not set qlog_max_size: 300 MiB.
 const defaultQLOGMaxSize = 300 * 1024 * 1024
 
+// qlogMaxSizeBytes converts the configured limit, a plain number of megabytes,
+// to bytes.
+func qlogMaxSizeBytes(sizeMB int) int64 {
+	return int64(sizeMB) * 1024 * 1024
+}
+
 // qlogClientSuffix and qlogServerSuffix name the traces this package writes.
 // Pruning only removes files matching them, so a directory shared with other
 // files stays untouched.

@@ -50,11 +50,7 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 	}
 	var tracer qlogTracer
 	if options.QLOGDirectory != "" {
-		var qlogMaxSize int64
-		if options.QLOGMaxSize != nil {
-			qlogMaxSize = int64(options.QLOGMaxSize.Value())
-		}
-		tracer, err = newQLOGTracer(logger, options.QLOGDirectory, qlogMaxSize)
+		tracer, err = newQLOGTracer(logger, options.QLOGDirectory, qlogMaxSizeBytes(options.QLOGMaxSize))
 		if err != nil {
 			return nil, err
 		}
