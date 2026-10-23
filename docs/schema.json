@@ -8130,15 +8130,7 @@
               "type": "string"
             },
             "qlog_max_size": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                {
-                  "type": "string"
-                }
-              ]
+              "type": "integer"
             },
             "fec": {
               "$ref": "#/$defs/QUICXFECOptions"
@@ -14189,15 +14181,7 @@
               "type": "string"
             },
             "qlog_max_size": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                {
-                  "type": "string"
-                }
-              ]
+              "type": "integer"
             },
             "network": {
               "anyOf": [
