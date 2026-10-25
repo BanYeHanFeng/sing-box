@@ -52,6 +52,10 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 	} else {
 		udpTimeout = C.UDPTimeout
 	}
+	fecOptions, err := parseFEC(options.FEC)
+	if err != nil {
+		return nil, err
+	}
 	service, err := quicx.NewService[int](quicx.ServiceOptions{
 		Context:     ctx,
 		Logger:      logger,
@@ -60,6 +64,7 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 		Heartbeat:   time.Duration(options.Heartbeat),
 		Handler:     inbound,
 		BBRProfile:  options.BBRProfile,
+		FEC:         fecOptions,
 	})
 	if err != nil {
 		return nil, err

@@ -16,7 +16,8 @@
   "udp_timeout": "",
   "idle_timeout": "",
   "heartbeat": "",
-  "bbr_profile": ""
+  "bbr_profile": "",
+  "fec": {}
 }
 ```
 
@@ -61,6 +62,33 @@ NAT 超时时间
 BBR 拥塞控制算法配置，可选 `conservative` `standard` `aggressive`。
 
 默认使用 `conservative`。
+
+#### fec
+
+前向纠错，保护本端发出的包。
+
+服务端发出的是应答，客户端发出的是请求，所以这一项只覆盖应答方向；两个方向都要保护时，入站与出站都要配置。冗余包与数据包一样占拥塞窗口，因此它不会让链路更拥塞，只会把一部分带宽换成无需重传的恢复。
+
+```json
+{
+  "fec": {
+    "data_shards": 10,
+    "parity_shards": 2
+  }
+}
+```
+
+#### fec.data_shards
+
+==必填==
+
+一组包含的包数，`2` 到 `32`。
+
+#### fec.parity_shards
+
+一组附带的冗余包数，`0` 到 `data_shards`。
+
+默认为 `0`，由丢包率决定：一组拿到它预期丢失数量的 1.5 倍的冗余，路径没有丢包时不发冗余。
 
 ### 说明
 

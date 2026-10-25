@@ -37,6 +37,10 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 	if err != nil {
 		return nil, err
 	}
+	fecOptions, err := parseFEC(options.FEC)
+	if err != nil {
+		return nil, err
+	}
 	client, err := quicx.NewClient(quicx.ClientOptions{
 		Context:       ctx,
 		Dialer:        outboundDialer,
@@ -45,6 +49,7 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 		IdleTimeout:   time.Duration(options.IdleTimeout),
 		Heartbeat:     time.Duration(options.Heartbeat),
 		BBRProfile:    options.BBRProfile,
+		FEC:           fecOptions,
 		Logger:        logger,
 	})
 	if err != nil {

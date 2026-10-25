@@ -8180,6 +8180,9 @@
                 "conservative",
                 "aggressive"
               ]
+            },
+            "fec": {
+              "$ref": "#/$defs/QUICXFECOptions"
             }
           },
           "required": [
@@ -14192,6 +14195,9 @@
                 "aggressive"
               ]
             },
+            "fec": {
+              "$ref": "#/$defs/QUICXFECOptions"
+            },
             "network": {
               "anyOf": [
                 {
@@ -18121,6 +18127,18 @@
         },
         "timeout": {
           "$ref": "#/$defs/Duration"
+        }
+      },
+      "additionalProperties": false
+    },
+    "QUICXFECOptions": {
+      "type": "object",
+      "properties": {
+        "data_shards": {
+          "type": "integer"
+        },
+        "parity_shards": {
+          "type": "integer"
         }
       },
       "additionalProperties": false
