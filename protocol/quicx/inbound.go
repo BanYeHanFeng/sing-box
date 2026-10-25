@@ -8,11 +8,9 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/inbound"
 	"github.com/sagernet/sing-box/common/listener"
-	"github.com/sagernet/sing-box/common/tls"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
-	qtls "github.com/sagernet/sing-quic"
 	"github.com/sagernet/sing-quic/quicx"
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/auth"
@@ -30,19 +28,13 @@ type Inbound struct {
 	router       adapter.ConnectionRouterEx
 	logger       log.ContextLogger
 	listener     *listener.Listener
-	tlsConfig    tls.ServerConfig
 	server       *quicx.Service[int]
 	userNameList []string
 }
 
 func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.QUICXInboundOptions) (adapter.Inbound, error) {
-	options.UDPFragmentDefault = true
-	if options.TLS == nil || !options.TLS.Enabled {
-		return nil, C.ErrTLSRequired
-	}
-	tlsConfig, err := tls.NewServer(ctx, logger, common.PtrValueOrDefault(options.TLS))
-	if err != nil {
-		return nil, err
+	if len(options.Users) == 0 {
+		return nil, E.New("missing users")
 	}
 	inbound := &Inbound{
 		Adapter: inbound.NewAdapter(C.TypeQUICX, tag),
@@ -53,7 +45,6 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 			Logger:  logger,
 			Listen:  options.ListenOptions,
 		}),
-		tlsConfig: tlsConfig,
 	}
 	var udpTimeout time.Duration
 	if options.UDPTimeout != 0 {
@@ -61,37 +52,14 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 	} else {
 		udpTimeout = C.UDPTimeout
 	}
-	var tracer qlogTracer
-	if options.QLOGDirectory != "" {
-		var qlogMaxSize int64
-		if options.QLOGMaxSize != nil {
-			qlogMaxSize = int64(options.QLOGMaxSize.Value())
-		}
-		tracer, err = newQLOGTracer(logger, options.QLOGDirectory, qlogMaxSize)
-		if err != nil {
-			return nil, err
-		}
-	}
 	service, err := quicx.NewService[int](quicx.ServiceOptions{
-		Context:   ctx,
-		Logger:    logger,
-		TLSConfig: tlsConfig,
-		QUICOptions: qtls.QUICOptions{
-			IdleTimeout:             options.IdleTimeout.Build(),
-			KeepAlivePeriod:         options.KeepAlivePeriod.Build(),
-			StreamReceiveWindow:     options.StreamReceiveWindow.Value(),
-			ConnectionReceiveWindow: options.ConnectionReceiveWindow.Value(),
-			MaxConcurrentStreams:    options.MaxConcurrentStreams,
-			InitialPacketSize:       options.InitialPacketSize,
-			DisablePathMTUDiscovery: options.DisablePathMTUDiscovery,
-		},
-		AuthTimeout:       time.Duration(options.AuthTimeout),
-		Heartbeat:         time.Duration(options.Heartbeat),
-		UDPTimeout:        udpTimeout,
-		Handler:           inbound,
-		AuthFailurePolicy: options.AuthFailurePolicy,
-		BBRProfile:        options.BBRProfile,
-		Tracer:            tracer,
+		Context:     ctx,
+		Logger:      logger,
+		UDPTimeout:  udpTimeout,
+		IdleTimeout: time.Duration(options.IdleTimeout),
+		Heartbeat:   time.Duration(options.Heartbeat),
+		Handler:     inbound,
+		BBRProfile:  options.BBRProfile,
 	})
 	if err != nil {
 		return nil, err
@@ -161,13 +129,6 @@ func (h *Inbound) Start(stage adapter.StartStage, scope *adapter.Scope) error {
 	if stage != adapter.StartStateStart {
 		return nil
 	}
-	if h.tlsConfig != nil {
-		err := h.tlsConfig.Start()
-		if err != nil {
-			return err
-		}
-		scope.Add(h.tlsConfig.Close)
-	}
 	packetConn, err := h.listener.ListenUDP()
 	if err != nil {
 		return err
@@ -184,7 +145,6 @@ func (h *Inbound) Start(stage adapter.StartStage, scope *adapter.Scope) error {
 func (h *Inbound) Close() error {
 	return common.Close(
 		h.listener,
-		h.tlsConfig,
 		common.PtrOrNil(h.server),
 	)
 }

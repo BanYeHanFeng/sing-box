@@ -13,15 +13,10 @@
       "password": "hello"
     }
   ],
-  "auth_timeout": "",
+  "udp_timeout": "",
+  "idle_timeout": "",
   "heartbeat": "",
-  "auth_failure_policy": "",
-  "bbr_profile": "",
-  "qlog_directory": "",
-  "qlog_max_size": "",
-  "tls": {},
-
-  ... // QUIC 字段
+  "bbr_profile": ""
 }
 ```
 
@@ -41,11 +36,19 @@ quicx 用户。
 
 quicx 用户密码。
 
-#### auth_timeout
+密码不上线：握手时两端各自用密码派生的密钥证明知道对方，服务端据此找到用户。
 
-服务器等待客户端发送认证命令的时间
+#### udp_timeout
 
-默认使用 `3s`。
+NAT 超时时间
+
+默认使用 `5m`。
+
+#### idle_timeout
+
+连接空闲超时时间
+
+默认使用 `30s`。
 
 #### heartbeat
 
@@ -53,45 +56,14 @@ quicx 用户密码。
 
 默认使用 `10s`。
 
-#### auth_failure_policy
-
-服务器处理 quicx 鉴权失败以及非 quicx 标准 HTTP/3 请求的方式，同时保持传输层与标准 HTTP/3 服务器不可分辨。
-
-| 策略 | 描述 |
-| - | - |
-| `h3_close` | 关闭 quic 连接，等同标准 HTTP/3 正常关闭。 |
-| `silent_drop`| 静默丢弃连接，服务端仅在宽限期内保留该连接，之后本地回收。 |
-
-默认使用 `h3_close`。
-
 #### bbr_profile
 
 BBR 拥塞控制算法配置，可选 `conservative` `standard` `aggressive`。
 
 默认使用 `conservative`。
 
-#### qlog_directory
+### 说明
 
-文件夹名字，填写后将在文件夹下记录每条 quicx 链接。
+quicx 不是 QUIC：它运行在自己的 UDP 传输层上，不使用 TLS 与 HTTP/3，也没有对应的配置项。
 
-默认关闭。
-
-#### qlog_max_size
-
-qlog 目录的总大小上限，单位：MB。
-
-默认使用 `300MB`。
-
-#### tls
-
-==必填==
-
-TLS 配置，参阅 [TLS](/zh/configuration/shared/tls/#入站)。
-
-ALPN 必须为 `h3`。
-
-
-### QUIC 字段
-
-参阅 [QUIC 字段](/zh/configuration/shared/quic/) 了解详情。
-
+握手是一来一回两个包，用密码与 X25519 派生的密钥认证并加密，之后的一切（包括 UDP 转发）都在同一个加密通道里，因此每个连接不重复握手，也不需要证书。

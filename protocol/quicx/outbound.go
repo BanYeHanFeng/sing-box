@@ -9,13 +9,10 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/outbound"
 	"github.com/sagernet/sing-box/common/dialer"
-	"github.com/sagernet/sing-box/common/tls"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
-	qtls "github.com/sagernet/sing-quic"
 	"github.com/sagernet/sing-quic/quicx"
-	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/bufio"
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/sagernet/sing/common/logger"
@@ -36,48 +33,19 @@ type Outbound struct {
 }
 
 func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.QUICXOutboundOptions) (adapter.Outbound, error) {
-	options.UDPFragmentDefault = true
-	if options.TLS == nil || !options.TLS.Enabled {
-		return nil, C.ErrTLSRequired
-	}
-	tlsConfig, err := tls.NewClient(ctx, logger, options.Server, common.PtrValueOrDefault(options.TLS))
-	if err != nil {
-		return nil, err
-	}
 	outboundDialer, err := dialer.New(ctx, options.DialerOptions, options.ServerIsDomain())
 	if err != nil {
 		return nil, err
-	}
-	var tracer qlogTracer
-	if options.QLOGDirectory != "" {
-		var qlogMaxSize int64
-		if options.QLOGMaxSize != nil {
-			qlogMaxSize = int64(options.QLOGMaxSize.Value())
-		}
-		tracer, err = newQLOGTracer(logger, options.QLOGDirectory, qlogMaxSize)
-		if err != nil {
-			return nil, err
-		}
 	}
 	client, err := quicx.NewClient(quicx.ClientOptions{
 		Context:       ctx,
 		Dialer:        outboundDialer,
 		ServerAddress: options.ServerOptions.Build(),
-		TLSConfig:     tlsConfig,
-		QUICOptions: qtls.QUICOptions{
-			IdleTimeout:             options.IdleTimeout.Build(),
-			KeepAlivePeriod:         options.KeepAlivePeriod.Build(),
-			StreamReceiveWindow:     options.StreamReceiveWindow.Value(),
-			ConnectionReceiveWindow: options.ConnectionReceiveWindow.Value(),
-			MaxConcurrentStreams:    options.MaxConcurrentStreams,
-			InitialPacketSize:       options.InitialPacketSize,
-			DisablePathMTUDiscovery: options.DisablePathMTUDiscovery,
-		},
-		Password:   options.Password,
-		Heartbeat:  time.Duration(options.Heartbeat),
-		BBRProfile: options.BBRProfile,
-		Tracer:     tracer,
-		Logger:     logger,
+		Password:      options.Password,
+		IdleTimeout:   time.Duration(options.IdleTimeout),
+		Heartbeat:     time.Duration(options.Heartbeat),
+		BBRProfile:    options.BBRProfile,
+		Logger:        logger,
 	})
 	if err != nil {
 		return nil, err
