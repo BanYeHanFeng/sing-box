@@ -22,7 +22,7 @@ on:
           - none
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.release_target }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.release_target }}
   cancel-in-progress: true
 
 jobs:
@@ -40,14 +40,11 @@ jobs:
       - name: 计算版本号
         id: outputs
         env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          EVENT_NAME: ${{ github.event_name }}
           INPUT_RELEASE_TARGET: ${{ inputs.release_target }}
           INPUT_VERSION: ${{ inputs.version }}
-          REF_NAME: ${{ github.ref_name }}
         run: |-
           set -euo pipefail
-          if [[ "${EVENT_NAME}" == "workflow_dispatch" && -n "${INPUT_VERSION}" ]]; then
+          if [[ -n "${INPUT_VERSION}" ]]; then
             VERSION="${INPUT_VERSION}"
           else
             VERSION="$(date -u +%Y.%m.%d)-$(git rev-parse --short HEAD)"
@@ -59,15 +56,7 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "计算出的版本号：${VERSION}"
 
-          if [[ "${EVENT_NAME}" == "push" ]]; then
-            if [[ "${REF_NAME}" == "${DEFAULT_BRANCH}" ]]; then
-              RELEASE_TARGET="prerelease"
-            else
-              RELEASE_TARGET="none"
-            fi
-          else
-            RELEASE_TARGET="${INPUT_RELEASE_TARGET}"
-          fi
+          RELEASE_TARGET="${INPUT_RELEASE_TARGET}"
           case "${RELEASE_TARGET}" in
             prerelease|release|none) ;;
             *)
