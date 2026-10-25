@@ -20,9 +20,6 @@ on:
           - prerelease
           - release
           - none
-  push:
-    branches:
-      - '**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ inputs.release_target }}
