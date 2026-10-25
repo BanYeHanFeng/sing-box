@@ -3,14 +3,14 @@
 # 使用方法: bash .github/scripts/setup-fork-deps.sh [quic_go_ref] [sing_quic_ref]
 #
 # 默认引用分支:
-#   quic-go   -> BanYeHanFeng-dev
-#   sing-quic -> BanYeHanFeng-dev
+#   quic-go   -> udpx-dev
+#   sing-quic -> udpx-dev
 #
 # 环境变量:
 #   FORK_QUIC_GO_REPO   (默认: https://github.com/BanYeHanFeng/quic-go.git)
 #   FORK_SING_QUIC_REPO (默认: https://github.com/BanYeHanFeng/sing-quic.git)
-#   FORK_QUIC_GO_REF    (默认: BanYeHanFeng-dev)
-#   FORK_SING_QUIC_REF  (默认: BanYeHanFeng-dev)
+#   FORK_QUIC_GO_REF    (默认: udpx-dev)
+#   FORK_SING_QUIC_REF  (默认: udpx-dev)
 set -euo pipefail
 
 WORKSPACE="${GITHUB_WORKSPACE:-$(pwd)}"
@@ -18,8 +18,8 @@ PARENT="$(dirname "${WORKSPACE}")"
 
 QUIC_GO_REPO="${FORK_QUIC_GO_REPO:-https://github.com/BanYeHanFeng/quic-go.git}"
 SING_QUIC_REPO="${FORK_SING_QUIC_REPO:-https://github.com/BanYeHanFeng/sing-quic.git}"
-QUIC_GO_REF="${1:-${FORK_QUIC_GO_REF:-BanYeHanFeng-dev}}"
-SING_QUIC_REF="${2:-${FORK_SING_QUIC_REF:-BanYeHanFeng-dev}}"
+QUIC_GO_REF="${1:-${FORK_QUIC_GO_REF:-udpx-dev}}"
+SING_QUIC_REF="${2:-${FORK_SING_QUIC_REF:-udpx-dev}}"
 
 echo "::group::检出 fork 依赖仓库"
 echo "quic-go   -> ${QUIC_GO_REPO} @ ${QUIC_GO_REF}"
