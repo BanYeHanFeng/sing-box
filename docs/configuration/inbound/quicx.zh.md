@@ -61,7 +61,7 @@ NAT 超时时间
 
 BBR 拥塞控制算法配置，可选 `conservative` `standard` `aggressive`。
 
-默认使用 `conservative`。
+默认使用 `standard`；`conservative` 的稳态窗口更小、启动期更早退出，`aggressive` 在干净的链路上更快，但丢包时方差更大。
 
 #### fec
 
