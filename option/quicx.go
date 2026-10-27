@@ -10,7 +10,6 @@ type QUICXInboundOptions struct {
 	UDPTimeout  badoption.Duration `json:"udp_timeout,omitempty"`
 	IdleTimeout badoption.Duration `json:"idle_timeout,omitempty"`
 	Heartbeat   badoption.Duration `json:"heartbeat,omitempty"`
-	BBRProfile  string             `json:"bbr_profile,omitempty" enum:"standard,conservative,aggressive"`
 	FEC         QUICXFECOptions    `json:"fec,omitempty"`
 }
 
@@ -33,7 +32,6 @@ type QUICXOutboundOptions struct {
 	Password    string             `json:"password,omitempty"`
 	IdleTimeout badoption.Duration `json:"idle_timeout,omitempty"`
 	Heartbeat   badoption.Duration `json:"heartbeat,omitempty"`
-	BBRProfile  string             `json:"bbr_profile,omitempty" enum:"standard,conservative,aggressive"`
 	FEC         QUICXFECOptions    `json:"fec,omitempty"`
 	Network     NetworkList        `json:"network,omitempty"`
 }

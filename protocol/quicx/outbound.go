@@ -48,7 +48,6 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 		Password:      options.Password,
 		IdleTimeout:   time.Duration(options.IdleTimeout),
 		Heartbeat:     time.Duration(options.Heartbeat),
-		BBRProfile:    options.BBRProfile,
 		FEC:           fecOptions,
 		Logger:        logger,
 	})

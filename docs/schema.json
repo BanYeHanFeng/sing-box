@@ -8173,14 +8173,6 @@
             "heartbeat": {
               "$ref": "#/$defs/Duration"
             },
-            "bbr_profile": {
-              "type": "string",
-              "enum": [
-                "standard",
-                "conservative",
-                "aggressive"
-              ]
-            },
             "fec": {
               "$ref": "#/$defs/QUICXFECOptions"
             }
@@ -14186,14 +14178,6 @@
             },
             "heartbeat": {
               "$ref": "#/$defs/Duration"
-            },
-            "bbr_profile": {
-              "type": "string",
-              "enum": [
-                "standard",
-                "conservative",
-                "aggressive"
-              ]
             },
             "fec": {
               "$ref": "#/$defs/QUICXFECOptions"

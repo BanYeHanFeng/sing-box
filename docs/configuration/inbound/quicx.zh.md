@@ -16,7 +16,6 @@
   "udp_timeout": "",
   "idle_timeout": "",
   "heartbeat": "",
-  "bbr_profile": "",
   "fec": {}
 }
 ```
@@ -56,12 +55,6 @@ NAT 超时时间
 发送心跳包以保持连接存活的时间间隔
 
 默认使用 `10s`。
-
-#### bbr_profile
-
-BBR 拥塞控制算法配置，可选 `conservative` `standard` `aggressive`。
-
-默认使用 `standard`；`conservative` 的稳态窗口更小、启动期更早退出，`aggressive` 在干净的链路上更快，但丢包时方差更大。
 
 #### fec
 
