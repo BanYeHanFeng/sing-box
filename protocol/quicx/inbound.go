@@ -63,6 +63,7 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 		IdleTimeout: time.Duration(options.IdleTimeout),
 		Heartbeat:   time.Duration(options.Heartbeat),
 		Handler:     inbound,
+		MTU:         options.MTU,
 		FEC:         fecOptions,
 	})
 	if err != nil {

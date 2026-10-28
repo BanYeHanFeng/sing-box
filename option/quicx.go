@@ -10,6 +10,7 @@ type QUICXInboundOptions struct {
 	UDPTimeout  badoption.Duration `json:"udp_timeout,omitempty"`
 	IdleTimeout badoption.Duration `json:"idle_timeout,omitempty"`
 	Heartbeat   badoption.Duration `json:"heartbeat,omitempty"`
+	MTU         int                `json:"mtu,omitempty"`
 	FEC         QUICXFECOptions    `json:"fec,omitempty"`
 }
 
@@ -42,6 +43,7 @@ type QUICXOutboundOptions struct {
 	Password    string             `json:"password,omitempty"`
 	IdleTimeout badoption.Duration `json:"idle_timeout,omitempty"`
 	Heartbeat   badoption.Duration `json:"heartbeat,omitempty"`
+	MTU         int                `json:"mtu,omitempty"`
 	FEC         QUICXFECOptions    `json:"fec,omitempty"`
 	Network     NetworkList        `json:"network,omitempty"`
 }
