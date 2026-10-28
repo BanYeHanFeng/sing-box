@@ -58,17 +58,22 @@ quicx 用户密码。
 ```json
 {
   "fec": {
-    "data_shards": 10,
-    "parity_shards": 2
+    "enabled": true
   }
 }
 ```
 
-#### fec.data_shards
+#### fec.enabled
 
 ==必填==
 
+开启前向纠错。未开启时不能填写 `data_shards` 与 `parity_shards`。
+
+#### fec.data_shards
+
 一组包含的包数，`2` 到 `32`。
+
+默认为 `10`。
 
 #### fec.parity_shards
 

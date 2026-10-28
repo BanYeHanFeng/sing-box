@@ -31,8 +31,9 @@ type QUICXUser struct {
 // the rate a proxy actually sends a group closes before it fills, so the parity is
 // a seventh of the traffic rather than a thirty-second.
 type QUICXFECOptions struct {
-	DataShards   int `json:"data_shards,omitempty"`
-	ParityShards int `json:"parity_shards,omitempty"`
+	Enabled      bool `json:"enabled,omitempty"`
+	DataShards   int  `json:"data_shards,omitempty"`
+	ParityShards int  `json:"parity_shards,omitempty"`
 }
 
 type QUICXOutboundOptions struct {
