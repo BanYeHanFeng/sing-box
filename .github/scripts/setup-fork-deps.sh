@@ -30,6 +30,19 @@ git clone --depth=1 -b "${SING_QUIC_REF}" "${SING_QUIC_REPO}" "${PARENT}/sing-qu
 
 echo "::endgroup::"
 
+echo "::group::清理 fork 依赖的 replace"
+# workspace 会合并各 use 模块 go.mod 的 replace，fork 里锁的版本和主模块不一致会直接冲突，
+# 统一以主模块 go.mod 的 replace 为准
+for fork in "${PARENT}/quic-go" "${PARENT}/sing-quic"; do
+	[[ -f "${fork}/go.mod" ]] || continue
+	while IFS= read -r module; do
+		[[ -n "${module}" ]] || continue
+		go mod edit -dropreplace="${module}" "${fork}/go.mod"
+		echo "${fork}: 移除 replace ${module}"
+	done < <(go mod edit -json "${fork}/go.mod" | python3 -c 'import json,sys; [print(r["Old"]["Path"]) for r in (json.load(sys.stdin).get("Replace") or [])]')
+done
+echo "::endgroup::"
+
 echo "::group::生成 go.work"
 cat > "${WORKSPACE}/go.work" <<EOF
 go 1.25.5
