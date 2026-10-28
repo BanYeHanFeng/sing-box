@@ -9,9 +9,9 @@ import (
 
 // parseFEC turns the redundancy of the configuration into what the transport takes.
 //
-// The counts are checked here rather than in the transport: a number that the
-// transport would clamp is a configuration the user cannot see is not what they
-// wrote, and a group of one packet is a configuration that protects nothing.
+// The counts are checked here rather than in the transport: a group of one packet
+// is a configuration that protects nothing, and more redundancy than members is a
+// group sent more times than it has packets. The transport would take either.
 func parseFEC(options option.QUICXFECOptions) (udpx.FECOptions, error) {
 	if options.DataShards == 0 {
 		if options.ParityShards != 0 {
