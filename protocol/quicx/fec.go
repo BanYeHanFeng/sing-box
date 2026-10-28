@@ -7,6 +7,8 @@ import (
 	"github.com/sagernet/sing-box/option"
 )
 
+const maxParityShards = 8
+
 // parseFEC turns the redundancy of the configuration into what the transport takes.
 //
 // The counts are checked here rather than in the transport: a group of one packet
@@ -27,6 +29,9 @@ func parseFEC(options option.QUICXFECOptions) (udpx.FECOptions, error) {
 	}
 	if options.ParityShards > options.DataShards {
 		return udpx.FECOptions{}, E.New("fec: ", options.ParityShards, " parity shards for ", options.DataShards, " data shards")
+	}
+	if options.ParityShards > maxParityShards {
+		return udpx.FECOptions{}, E.New("fec: ", options.ParityShards, " parity shards, at most ", maxParityShards)
 	}
 	return udpx.FECOptions{
 		DataShards:   options.DataShards,
