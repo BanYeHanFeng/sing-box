@@ -23,14 +23,15 @@ type QUICXUser struct {
 // so a proxy that wants both directions covered sets it on the inbound and on the
 // outbound.
 //
-// It is worth its cost only for what the transport cannot send again: a forwarded
-// UDP packet the path drops is gone, while a stream's loss is repaired by a
-// retransmission a round trip later. On a path losing 1.5% of its packets, 32+2
-// took forwarded datagrams from 1.5% lost to 0.2%; what it costs is its redundancy
-// on the wire, which is 6% of a stream's throughput. Turning it on for streams does
-// not help: a lost packet there costs one round trip rather than bandwidth, and at
-// the rate a proxy actually sends a group closes before it fills, so the parity is
-// a seventh of the traffic rather than a thirty-second.
+// What it is worth depends on what the loss costs. A forwarded UDP packet the
+// path drops is gone, and on a path losing 1.5% of its packets, 32+2 took those
+// from 1.5% lost to 0.2%. A stream's loss is repaired by a retransmission a round
+// trip later, so what redundancy buys there is that round trip: on a path losing
+// a tenth of its packets, 32+2 cut the p95 of a 1 MB transfer by a third and left
+// a full-speed transfer within a few percent of what it was without any parity,
+// at a sixteenth of the traffic and a fifth more CPU. Below a few percent of loss
+// the parity is a cost with nothing to buy: what a group can repair is only ever
+// as much as the path drops inside it.
 type QUICXFECOptions struct {
 	Enabled      bool `json:"enabled,omitempty"`
 	DataShards   int  `json:"data_shards,omitempty"`

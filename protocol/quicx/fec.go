@@ -8,7 +8,14 @@ import (
 )
 
 const (
-	defaultDataShards   = 10
+	// defaultDataShards is the group size a proxy that asks for redundancy gets.
+	// A stream is what this default is for: the parity of a group covers a loss
+	// the stream would otherwise wait a round trip to have retransmitted, and the
+	// wider the group the less the redundancy costs — thirty-two members with two
+	// parity shards is a sixteenth of the traffic, and it measured better on a
+	// lossy path than ten members with two did, both in what a short transfer
+	// waits and in what the redundancy takes from a full one.
+	defaultDataShards   = 32
 	defaultParityShards = 2
 	maxParityShards     = 8
 )
