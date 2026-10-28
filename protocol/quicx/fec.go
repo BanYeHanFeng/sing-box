@@ -8,8 +8,9 @@ import (
 )
 
 const (
-	defaultDataShards = 10
-	maxParityShards   = 8
+	defaultDataShards   = 10
+	defaultParityShards = 2
+	maxParityShards     = 8
 )
 
 // parseFEC turns the redundancy of the configuration into what the transport takes.
@@ -31,17 +32,21 @@ func parseFEC(options option.QUICXFECOptions) (udpx.FECOptions, error) {
 	if dataShards < 2 {
 		return udpx.FECOptions{}, E.New("fec: data_shards of ", dataShards)
 	}
-	if options.ParityShards < 0 {
-		return udpx.FECOptions{}, E.New("fec: parity_shards of ", options.ParityShards)
+	parityShards := options.ParityShards
+	if parityShards == 0 {
+		parityShards = defaultParityShards
 	}
-	if options.ParityShards > dataShards {
-		return udpx.FECOptions{}, E.New("fec: ", options.ParityShards, " parity shards for ", dataShards, " data shards")
+	if parityShards < 0 {
+		return udpx.FECOptions{}, E.New("fec: parity_shards of ", parityShards)
 	}
-	if options.ParityShards > maxParityShards {
-		return udpx.FECOptions{}, E.New("fec: ", options.ParityShards, " parity shards, at most ", maxParityShards)
+	if parityShards > dataShards {
+		return udpx.FECOptions{}, E.New("fec: ", parityShards, " parity shards for ", dataShards, " data shards")
+	}
+	if parityShards > maxParityShards {
+		return udpx.FECOptions{}, E.New("fec: ", parityShards, " parity shards, at most ", maxParityShards)
 	}
 	return udpx.FECOptions{
 		DataShards:   dataShards,
-		ParityShards: options.ParityShards,
+		ParityShards: parityShards,
 	}, nil
 }

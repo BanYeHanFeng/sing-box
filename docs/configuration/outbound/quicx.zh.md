@@ -77,9 +77,9 @@ quicx 用户密码。
 
 #### fec.parity_shards
 
-一组附带的冗余包数，`0` 到 `8`，且不超过 `data_shards`。
+一组附带的冗余包数，`2` 到 `8`，且不超过 `data_shards`。
 
-默认为 `0`，此时按 `2` 处理。
+默认为 `2`。
 
 #### network
 
