@@ -32,6 +32,11 @@ type QUICXUser struct {
 // at a sixteenth of the traffic and a fifth more CPU. Below a few percent of loss
 // the parity is a cost with nothing to buy: what a group can repair is only ever
 // as much as the path drops inside it.
+//
+// The counts describe a full group. A group closes when it is full or when the
+// sender stops feeding it, and one that closed early carries its share of the
+// redundancy rather than the whole of it, so the ratio here is what the parity
+// costs at most.
 type QUICXFECOptions struct {
 	Enabled      bool `json:"enabled,omitempty"`
 	DataShards   int  `json:"data_shards,omitempty"`
