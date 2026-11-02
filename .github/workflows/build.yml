@@ -154,8 +154,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { arch: arm64, ndk: "aarch64-linux-android23" }
+        arch: [arm64]
     steps:
       - name: 检出代码
         uses: actions/checkout@v7
@@ -180,11 +179,6 @@ jobs:
           restore-keys: go-build-${{ runner.os }}-go1.26.5-android-${{ matrix.arch }}-
       - name: 检出 fork 依赖
         run: bash .github/scripts/setup-fork-deps.sh
-      - name: 配置 Android NDK
-        id: setup-ndk
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r28
       - name: 设置构建标签
         env:
           INPUT_BUILD_TAGS: ${{ inputs.custom_build_tags }}
@@ -202,16 +196,12 @@ jobs:
       - name: 构建
         run: |
           set -xeuo pipefail
-          go install -v ./cmd/internal/build
-          export CC='${{ matrix.ndk }}-clang'
-          export CXX="${CC}++"
           mkdir -p dist
-          GOOS=android GOARCH=${{ matrix.arch }} build go build -v -trimpath -o dist/sing-box -tags "${BUILD_TAGS}" \
+          GOOS=android GOARCH=${{ matrix.arch }} go build -v -trimpath -o dist/sing-box -tags "${BUILD_TAGS}" \
           -ldflags "-X 'github.com/sagernet/sing-box/constant.Version=${{ needs.calculate_version.outputs.version }}' ${LDFLAGS_SHARED} -s -w -buildid=" \
           ./cmd/sing-box
         env:
-          CGO_ENABLED: "1"
-          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          CGO_ENABLED: "0"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: 打包归档
         run: |
