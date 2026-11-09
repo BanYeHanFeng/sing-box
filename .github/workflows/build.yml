@@ -150,7 +150,7 @@ jobs:
     name: 构建 Android (${{ matrix.arch }})
     needs:
       - calculate_version
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04-arm
     strategy:
       fail-fast: false
       matrix:
@@ -175,8 +175,8 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/go-build
-          key: go-build-${{ runner.os }}-go1.26.5-android-${{ matrix.arch }}-${{ hashFiles('go.sum') }}
-          restore-keys: go-build-${{ runner.os }}-go1.26.5-android-${{ matrix.arch }}-
+          key: go-build-${{ runner.os }}-${{ runner.arch }}-go1.26.5-android-${{ matrix.arch }}-${{ hashFiles('go.sum') }}
+          restore-keys: go-build-${{ runner.os }}-${{ runner.arch }}-go1.26.5-android-${{ matrix.arch }}-
       - name: 检出 fork 依赖
         run: bash .github/scripts/setup-fork-deps.sh
       - name: 设置构建标签
