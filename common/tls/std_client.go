@@ -92,6 +92,10 @@ func (c *STDClientConfig) STDConfig() (*STDConfig, error) {
 	return c.config, nil
 }
 
+func (c *STDClientConfig) SetClientSessionCache(cache tls.ClientSessionCache) {
+	c.config.ClientSessionCache = cache
+}
+
 func (c *STDClientConfig) Client(conn net.Conn) (Conn, error) {
 	if c.fragment || c.recordFragment {
 		conn = tf.NewConn(conn, c.ctx, c.fragment, c.recordFragment, c.fragmentFallbackDelay)
