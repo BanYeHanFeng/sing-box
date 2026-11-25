@@ -21,10 +21,6 @@ type (
 	CurveID         = tls.CurveID
 )
 
-type ClientSessionCacheSetter interface {
-	SetClientSessionCache(cache tls.ClientSessionCache)
-}
-
 func ParseTLSVersion(version string) (uint16, error) {
 	switch version {
 	case "1.0":
