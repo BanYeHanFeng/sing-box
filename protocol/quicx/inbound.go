@@ -36,6 +36,10 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 	if len(options.Users) == 0 {
 		return nil, E.New("missing users")
 	}
+	traceOptions, err := buildTrace(options.Trace)
+	if err != nil {
+		return nil, err
+	}
 	inbound := &Inbound{
 		Adapter: inbound.NewAdapter(C.TypeQUICX, tag),
 		router:  router,
@@ -60,6 +64,7 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 		Heartbeat:   time.Duration(options.Heartbeat),
 		Handler:     inbound,
 		MTU:         options.MTU,
+		Trace:       traceOptions,
 	})
 	if err != nil {
 		return nil, err

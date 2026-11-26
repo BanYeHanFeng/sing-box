@@ -11,6 +11,7 @@ type QUICXInboundOptions struct {
 	IdleTimeout badoption.Duration `json:"idle_timeout,omitempty"`
 	Heartbeat   badoption.Duration `json:"heartbeat,omitempty"`
 	MTU         int                `json:"mtu,omitempty"`
+	Trace       QUICXTraceOptions  `json:"trace,omitempty"`
 }
 
 type QUICXUser struct {
@@ -25,5 +26,12 @@ type QUICXOutboundOptions struct {
 	IdleTimeout badoption.Duration `json:"idle_timeout,omitempty"`
 	Heartbeat   badoption.Duration `json:"heartbeat,omitempty"`
 	MTU         int                `json:"mtu,omitempty"`
+	Trace       QUICXTraceOptions  `json:"trace,omitempty"`
 	Network     NetworkList        `json:"network,omitempty"`
+}
+
+type QUICXTraceOptions struct {
+	Enabled  *bool  `json:"enabled,omitempty"`
+	Path     string `json:"path,omitempty"`
+	Capacity int    `json:"capacity,omitempty"`
 }

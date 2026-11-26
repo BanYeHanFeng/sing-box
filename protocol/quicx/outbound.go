@@ -33,6 +33,10 @@ type Outbound struct {
 }
 
 func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.QUICXOutboundOptions) (adapter.Outbound, error) {
+	traceOptions, err := buildTrace(options.Trace)
+	if err != nil {
+		return nil, err
+	}
 	outboundDialer, err := dialer.New(ctx, options.DialerOptions, options.ServerIsDomain())
 	if err != nil {
 		return nil, err
@@ -45,6 +49,7 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 		IdleTimeout:   time.Duration(options.IdleTimeout),
 		Heartbeat:     time.Duration(options.Heartbeat),
 		MTU:           options.MTU,
+		Trace:         traceOptions,
 		Logger:        logger,
 	})
 	if err != nil {
