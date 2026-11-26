@@ -66,16 +66,17 @@ jobs:
           esac
           echo "release_target=${RELEASE_TARGET}" >> "$GITHUB_OUTPUT"
 
-  build_linux:
-    name: 构建 Linux (${{ matrix.arch }})
+  build:
+    name: 构建 ${{ matrix.goos }} (${{ matrix.arch }})
     needs:
       - calculate_version
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runs_on }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { arch: amd64 }
+          - { goos: linux, arch: amd64, runs_on: ubuntu-latest, tags_file: DEFAULT_BUILD_TAGS }
+          - { goos: android, arch: arm64, runs_on: ubuntu-26.04-arm, tags_file: DEFAULT_BUILD_TAGS_ANDROID }
     steps:
       - name: 检出代码
         uses: actions/checkout@v7
@@ -95,7 +96,7 @@ jobs:
           if [[ -n "${INPUT_BUILD_TAGS}" ]]; then
             TAGS="${INPUT_BUILD_TAGS}"
           else
-            TAGS=$(cat release/DEFAULT_BUILD_TAGS)
+            TAGS=$(cat "release/${{ matrix.tags_file }}")
           fi
           echo "BUILD_TAGS=${TAGS}" >> "${GITHUB_ENV}"
       - name: 设置共享 ldflags
@@ -110,89 +111,25 @@ jobs:
           ./cmd/sing-box
         env:
           CGO_ENABLED: "0"
-          GOOS: linux
+          GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.arch }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: 打包归档
         run: |
           set -xeuo pipefail
-          DIR_NAME="sing-box-${{ needs.calculate_version.outputs.version }}-linux-${{ matrix.arch }}"
+          DIR_NAME="sing-box-${{ needs.calculate_version.outputs.version }}-${{ matrix.goos }}-${{ matrix.arch }}"
           cd dist
           mkdir -p "${DIR_NAME}"
           cp ../LICENSE "${DIR_NAME}"
           cp sing-box "${DIR_NAME}"
-          tar -czvf "${DIR_NAME}.tar.gz" "${DIR_NAME}"
+          tar -I 'zstd -19 -T0' -cvf "${DIR_NAME}.tar.zst" "${DIR_NAME}"
           rm -r "${DIR_NAME}"
       - name: 清理
         run: rm -f dist/sing-box
       - name: 上传构建产物
         uses: actions/upload-artifact@v7
         with:
-          name: binary-linux_${{ matrix.arch }}
-          path: "dist"
-          compression-level: 0
-          retention-days: 3
-
-  build_android:
-    name: 构建 Android (${{ matrix.arch }})
-    needs:
-      - calculate_version
-    runs-on: ubuntu-26.04-arm
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [arm64]
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 1
-      - name: 配置 Go 环境
-        uses: actions/setup-go@v7
-        with:
-          go-version: stable
-      - name: 检出 fork 依赖
-        run: bash .github/scripts/setup-fork-deps.sh
-      - name: 设置构建标签
-        env:
-          INPUT_BUILD_TAGS: ${{ inputs.custom_build_tags }}
-        run: |
-          set -euo pipefail
-          if [[ -n "${INPUT_BUILD_TAGS}" ]]; then
-            TAGS="${INPUT_BUILD_TAGS}"
-          else
-            TAGS=$(cat release/DEFAULT_BUILD_TAGS_ANDROID)
-          fi
-          echo "BUILD_TAGS=${TAGS}" >> "${GITHUB_ENV}"
-      - name: 设置共享 ldflags
-        run: |
-          echo "LDFLAGS_SHARED=$(cat release/LDFLAGS)" >> "${GITHUB_ENV}"
-      - name: 构建
-        run: |
-          set -xeuo pipefail
-          mkdir -p dist
-          GOOS=android GOARCH=${{ matrix.arch }} go build -v -trimpath -o dist/sing-box -tags "${BUILD_TAGS}" \
-          -ldflags "-X 'github.com/sagernet/sing-box/constant.Version=${{ needs.calculate_version.outputs.version }}' ${LDFLAGS_SHARED} -s -w -buildid=" \
-          ./cmd/sing-box
-        env:
-          CGO_ENABLED: "0"
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: 打包归档
-        run: |
-          set -xeuo pipefail
-          DIR_NAME="sing-box-${{ needs.calculate_version.outputs.version }}-android-${{ matrix.arch }}"
-          cd dist
-          mkdir -p "${DIR_NAME}"
-          cp ../LICENSE "${DIR_NAME}"
-          cp sing-box "${DIR_NAME}"
-          tar -czvf "${DIR_NAME}.tar.gz" "${DIR_NAME}"
-          rm -r "${DIR_NAME}"
-      - name: 清理
-        run: rm -f dist/sing-box
-      - name: 上传构建产物
-        uses: actions/upload-artifact@v7
-        with:
-          name: binary-android_${{ matrix.arch }}
+          name: binary-${{ matrix.goos }}_${{ matrix.arch }}
           path: "dist"
           compression-level: 0
           retention-days: 3
@@ -205,8 +142,7 @@ jobs:
       cancel-in-progress: false
     needs:
       - calculate_version
-      - build_linux
-      - build_android
+      - build
     runs-on: ubuntu-latest
     permissions:
       contents: write
